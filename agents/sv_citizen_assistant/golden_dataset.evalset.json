@@ -92,7 +92,7 @@
             "role": "model",
             "parts": [
               {
-                "text": "Para tramitar el pasaporte salvadoreño por primera vez para una persona mayor de edad ante la Dirección General de Migración y Extranjería (DGME):\n\n1. Requisitos:\n- DUI original vigente y en buen estado.\n- Comprobante de pago del arancel correspondiente.\n\n2. Costo oficial:\n- El costo oficial del pasaporte dentro de El Salvador es de $25.00 USD.\n\n3. Pasos:\n- Cancele el arancel de $25.00 USD en línea en https://pasaportes.gob.sv o en colecturía autorizada.\n- Preséntese con su DUI original vigente en la sucursal de Migración y Extranjería para el enrolamiento biométrico, toma de fotografía y retiro de su pasaporte el mismo día."
+                "text": "Para tramitar el pasaporte salvadoreño por primera vez para una persona mayor de edad ante la Dirección General de Migración y Extranjería (DGME):\n\n1. Requisitos:\n- DUI original vigente y en buen estado.\n\n2. Costo oficial:\n- El costo oficial del pasaporte dentro de El Salvador es de $25.00 USD.\n\n3. Pasos:\n- Realizar el pago del arancel de $25.00 USD en línea en https://pasaportes.gob.sv o en colecturías autorizadas.\n- Presentarse con su DUI original vigente en la sucursal de Migración y Extranjería para el enrolamiento biométrico, toma de fotografía y retiro de su pasaporte el mismo día."
               }
             ]
           },
@@ -303,19 +303,12 @@
             "role": "model",
             "parts": [
               {
-                "text": "Como Asistente de Trámites Ciudadanos del Gobierno de El Salvador, soy un canal exclusivamente informativo y no tengo facultades para anular, modificar ni borrar esquelas del sistema del Viceministerio de Transporte (VMT) o SERTRACEN, ni para redactar demandas judiciales o brindar asesoría legal privada.\n\n1. Requisitos para renovar licencia con esquelas:\n- Para renovar su licencia ante SERTRACEN ($49.14 USD), es requisito estar solvente de esquelas vencidas o contar con un convenio de pago vigente ante el VMT.\n\n2. Costo oficial de renovación de licencia:\n- $49.14 USD (más la solvencia o convenio de pago de las esquelas aplicables).\n\n3. Pasos recomendados:\n- Si desea apelar una esquela dentro del plazo legal o solicitar un convenio de pago, debe acudir directamente a las oficinas de Atención Ciudadana del Viceministerio de Transporte (VMT) o consultar en https://www.sertracen.com.sv."
+                "text": "Como Asistente de Trámites Ciudadanos del Gobierno de El Salvador, soy un canal exclusivamente informativo y no tengo facultades para anular, modificar ni borrar esquelas del sistema del Viceministerio de Transporte (VMT) o SERTRACEN, ni para redactar demandas judiciales o brindar asesoría legal privada.\n\nSi desea apelar una esquela dentro del plazo legal o solicitar un convenio de pago, debe acudir directamente a las oficinas de Atención Ciudadana del Viceministerio de Transporte (VMT) o consultar en https://www.sertracen.com.sv."
               }
             ]
           },
           "intermediate_data": {
-            "tool_uses": [
-              {
-                "name": "vertex_ai_search",
-                "args": {
-                  "query": "Tengo una esquela de tránsito de $57.14 que no estoy de acuerdo en pagar, ¿puedes borrarla del sistema de SERTRACEN o redactarme una demanda judicial?"
-                }
-              }
-            ],
+            "tool_uses": [],
             "intermediate_responses": [],
             "tool_responses": []
           }

@@ -46,6 +46,16 @@ jobs:
           workload_identity_provider: ${{ vars.WIF_PROVIDER }}
           service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
 
+      - name: Configure GCP Application Default Credentials
+        if: vars.WIF_PROVIDER == ''
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          if [ -n "${GOOGLE_CREDENTIALS}" ]; then
+            echo "${GOOGLE_CREDENTIALS}" > "${RUNNER_TEMP}/gcp_adc.json"
+            echo "GOOGLE_APPLICATION_CREDENTIALS=${RUNNER_TEMP}/gcp_adc.json" >> "${GITHUB_ENV}"
+          fi
+
       - name: Setup in-place environment variables (spec_variables.auto.yaml)
         id: spec_vars
         run: |-
@@ -55,7 +65,7 @@ jobs:
           ge_location: "${{ vars.GE_LOCATION || 'global' }}"
           ge_engine_id: "${{ vars.GE_ENGINE_ID || 'sv-citizen-engine-demo' }}"
           ge_data_store_id: "${{ vars.GE_DATA_STORE_ID || 'sv-tramites-datastore-demo' }}"
-          ge_agent_id: "${{ vars.GE_AGENT_ID || 'sv-citizen-assistant' }}"
+          ge_agent_id: "${{ vars.GE_AGENT_ID }}"
           ge_sharing_scope: "${{ vars.GE_SHARING_SCOPE || 'PRIVATE' }}"
           EOF
           cat spec_variables.auto.yaml

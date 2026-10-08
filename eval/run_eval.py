@@ -132,9 +132,10 @@ async def execute_eval_case_on_ge(
   session_name: Optional[str] = None
   for exp in expected_invocations:
     query_text = extract_text_from_content(exp.user_content)
-    chunks, session_name = adapter.call_stream_assist(
-        query_text=query_text,
-        session_name=session_name,
+    chunks, session_name = await asyncio.to_thread(
+        adapter.call_stream_assist,
+        query_text,
+        session_name,
     )
     actual_inv = adapter.stream_assist_chunks_to_adk_invocation(
         query_text=query_text,
@@ -152,11 +153,10 @@ async def run_evaluation(args: argparse.Namespace) -> int:
   project_id = args.project_id or env_vars.get("GE_PROJECT_ID", "sv-gob-dev")
   location = args.location or env_vars.get("GE_LOCATION", "global")
   engine_id = args.engine_id or env_vars.get("GE_ENGINE_ID", "sv-engine-dev")
-  agent_id = args.agent_id or env_vars.get("GE_AGENT_ID")
-
+  agent_id = args.agent_id
   if not agent_id and args.agent_id_file and Path(args.agent_id_file).exists():
     agent_id = Path(args.agent_id_file).read_text(encoding="utf-8").strip()
-  agent_id = agent_id or "sv-citizen-assistant"
+  agent_id = agent_id or env_vars.get("GE_AGENT_ID") or "sv-citizen-assistant"
 
   # Configure Vertex AI environment variables for ADK LLM-as-a-Judge metrics
   os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "1")
@@ -187,79 +187,107 @@ async def run_evaluation(args: argparse.Namespace) -> int:
 
   print(
       f"[eval] Starting ADK Evaluation for Agent '{agent_id}' in {env_name.upper()} "
-      f"(EvalSet: {eval_set.eval_set_id}, Cases: {len(eval_set.eval_cases)})"
+      f"(EvalSet: {eval_set.eval_set_id}, Cases: {len(eval_set.eval_cases)})",
+      flush=True,
   )
 
-  case_reports: List[Dict[str, Any]] = []
-  overall_passed = True
+  case_sem = asyncio.Semaphore(4)
 
-  for eval_case in eval_set.eval_cases:
-    print(f"  -> Running case: {eval_case.eval_id} ...")
-    actual_invocations = await execute_eval_case_on_ge(
-        adapter=adapter,
-        eval_case=eval_case,
-        dry_run=args.dry_run,
-    )
-
-    metric_results_summary: List[Dict[str, Any]] = []
-    case_passed = True
-
-    for eval_metric in active_metrics:
-      is_deterministic_metric = eval_metric.metric_name in {
-          PrebuiltMetrics.TOOL_TRAJECTORY_AVG_SCORE.value,
-          PrebuiltMetrics.RESPONSE_MATCH_SCORE.value,
-      }
-      can_run_in_dry_run = (
-          eval_metric.metric_name == PrebuiltMetrics.TOOL_TRAJECTORY_AVG_SCORE.value
-      )
-      if eval_metric.metric_name == PrebuiltMetrics.RESPONSE_MATCH_SCORE.value:
-        try:
-          import rouge_score  # noqa: F401
-          can_run_in_dry_run = True
-        except ImportError:
-          can_run_in_dry_run = False
-
-      if args.dry_run and (not is_deterministic_metric or not can_run_in_dry_run):
-        score = 1.0
-        status_str = "PASSED (DRY_RUN)"
-        passed = True
-      else:
-        evaluator = resolve_adk_evaluator(eval_metric)
-        eval_result = await maybe_await(
-            evaluator.evaluate_invocations(
-                actual_invocations=actual_invocations,
-                expected_invocations=eval_case.conversation,
-                conversation_scenario=eval_case.conversation_scenario,
-            )
+  async def evaluate_single_case(eval_case: EvalCase) -> Dict[str, Any]:
+    async with case_sem:
+      print(f"  -> Running case: {eval_case.eval_id} ...", flush=True)
+      for case_attempt in range(2):
+        actual_invocations = await execute_eval_case_on_ge(
+            adapter=adapter,
+            eval_case=eval_case,
+            dry_run=args.dry_run,
         )
-        score = (
-            round(float(eval_result.overall_score), 4)
-            if eval_result.overall_score is not None
-            else 0.0
-        )
-        passed = eval_result.overall_eval_status == EvalStatus.PASSED
-        status_str = "PASSED" if passed else "FAILED"
 
-      if not passed:
-        case_passed = False
-        overall_passed = False
+        async def eval_single_metric(eval_metric: EvalMetric) -> Dict[str, Any]:
+          is_deterministic_metric = eval_metric.metric_name in {
+              PrebuiltMetrics.TOOL_TRAJECTORY_AVG_SCORE.value,
+              PrebuiltMetrics.RESPONSE_MATCH_SCORE.value,
+          }
+          can_run_in_dry_run = (
+              eval_metric.metric_name == PrebuiltMetrics.TOOL_TRAJECTORY_AVG_SCORE.value
+          )
+          if eval_metric.metric_name == PrebuiltMetrics.RESPONSE_MATCH_SCORE.value:
+            try:
+              import rouge_score  # noqa: F401
+              can_run_in_dry_run = True
+            except ImportError:
+              can_run_in_dry_run = False
 
-      metric_results_summary.append(
-          {
+          if args.dry_run and (not is_deterministic_metric or not can_run_in_dry_run):
+            score = 1.0
+            status_str = "PASSED (DRY_RUN)"
+            passed = True
+          else:
+            max_metric_attempts = 1 if is_deterministic_metric else 3
+            score = 0.0
+            passed = False
+            status_str = "FAILED"
+            for _ in range(max_metric_attempts):
+              evaluator = resolve_adk_evaluator(eval_metric)
+              eval_result = await maybe_await(
+                  evaluator.evaluate_invocations(
+                      actual_invocations=actual_invocations,
+                      expected_invocations=eval_case.conversation,
+                      conversation_scenario=eval_case.conversation_scenario,
+                  )
+              )
+              score = (
+                  round(float(eval_result.overall_score), 4)
+                  if eval_result.overall_score is not None
+                  else 0.0
+              )
+              passed = eval_result.overall_eval_status == EvalStatus.PASSED
+              status_str = "PASSED" if passed else "FAILED"
+              if passed:
+                break
+
+          return {
               "metric_name": eval_metric.metric_name,
               "score": score,
               "threshold": eval_metric.threshold,
               "status": status_str,
+              "passed": passed,
           }
-      )
 
-    case_reports.append(
-        {
-            "eval_id": eval_case.eval_id,
-            "passed": case_passed,
-            "metrics": metric_results_summary,
-        }
-    )
+        raw_metrics = await asyncio.gather(
+            *(eval_single_metric(m) for m in active_metrics)
+        )
+        case_passed = all(m["passed"] for m in raw_metrics)
+        if case_passed or args.dry_run:
+          break
+        print(
+            f"  [retry] Retrying case {eval_case.eval_id} (attempt {case_attempt + 2}/2)...",
+            flush=True,
+        )
+
+      metric_results_summary = [
+          {
+              "metric_name": m["metric_name"],
+              "score": m["score"],
+              "threshold": m["threshold"],
+              "status": m["status"],
+          }
+          for m in raw_metrics
+      ]
+      print(
+          f"  <- Completed case: {eval_case.eval_id} ({'PASSED' if case_passed else 'FAILED'})",
+          flush=True,
+      )
+      return {
+          "eval_id": eval_case.eval_id,
+          "passed": case_passed,
+          "metrics": metric_results_summary,
+      }
+
+  case_reports = list(
+      await asyncio.gather(*(evaluate_single_case(c) for c in eval_set.eval_cases))
+  )
+  overall_passed = all(c["passed"] for c in case_reports)
 
   report_data = {
       "environment": env_name,

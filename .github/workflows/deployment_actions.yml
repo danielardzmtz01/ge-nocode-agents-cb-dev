@@ -27,7 +27,7 @@ jobs:
           ge_location: "${{ vars.GE_LOCATION || 'global' }}"
           ge_engine_id: "${{ vars.GE_ENGINE_ID || 'sv-citizen-engine-demo' }}"
           ge_data_store_id: "${{ vars.GE_DATA_STORE_ID || 'sv-tramites-datastore-demo' }}"
-          ge_agent_id: "${{ vars.GE_AGENT_ID || 'sv-citizen-assistant' }}"
+          ge_agent_id: "${{ vars.GE_AGENT_ID }}"
           ge_sharing_scope: "${{ vars.GE_SHARING_SCOPE || 'PRIVATE' }}"
           EOF
           python cli/ge_agent_cli.py push --vars-file spec_variables.auto.yaml --dry-run

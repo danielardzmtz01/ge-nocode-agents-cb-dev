@@ -153,6 +153,50 @@ def parameterize_agent_payload(
   return parsed
 
 
+def resolve_project_number(
+    base_url: str,
+    assistant_parent: str,
+    project_id: str,
+    headers: Dict[str, str],
+) -> str:
+  """Resolves the numeric GCP project_number from Discovery Engine resource names."""
+  if project_id.isdigit():
+    return project_id
+  resp = requests.get(f"{base_url}/{assistant_parent}", headers=headers, timeout=30)
+  if resp.status_code == 200:
+    name = resp.json().get("name", "")
+    parts = name.split("/")
+    if len(parts) >= 2 and parts[0] == "projects" and parts[1].isdigit():
+      return parts[1]
+  return project_id
+
+
+def normalize_low_code_payload(
+    hydrated_agent: Dict[str, Any],
+    project_id: str,
+    project_number: str,
+) -> Dict[str, Any]:
+  """Normalizes LowCodeAgentDefinition dataStoreSpecs to use numeric project_number and strips fields managed by lifecycle RPCs."""
+  payload = copy.deepcopy(hydrated_agent)
+  # sharingConfig is managed via :requestAgentReview / PATCH ?updateMask=sharingConfig
+  payload.pop("sharingConfig", None)
+
+  if "lowCodeAgentDefinition" in payload:
+    # starterPrompts is output-only when draftStarterPrompts is used; :deployLowCode promotes draftStarterPrompts -> starterPrompts
+    if "draftStarterPrompts" in payload["lowCodeAgentDefinition"]:
+      payload.pop("starterPrompts", None)
+    for node in payload["lowCodeAgentDefinition"].get("nodes", []):
+      llm_node = node.get("llmAgentNode", {})
+      specs = llm_node.get("dataStoreSpecs", {}).get("specs", [])
+      for spec in specs:
+        ds = spec.get("dataStore", "")
+        if ds.startswith(f"projects/{project_id}/"):
+          spec["dataStore"] = ds.replace(
+              f"projects/{project_id}/", f"projects/{project_number}/", 1
+          )
+  return payload
+
+
 def find_existing_agent(
     base_url: str,
     assistant_parent: str,
@@ -246,6 +290,9 @@ def cmd_push(args: argparse.Namespace) -> None:
     return
 
   headers = get_auth_headers(project_id)
+  project_number = resolve_project_number(base_url, assistant_parent, project_id, headers)
+  api_payload = normalize_low_code_payload(hydrated_agent, project_id, project_number)
+
   existing = find_existing_agent(
       base_url=base_url,
       assistant_parent=assistant_parent,
@@ -256,16 +303,23 @@ def cmd_push(args: argparse.Namespace) -> None:
 
   if existing:
     agent_resource_name = existing["name"]
-    patch_url = f"{base_url}/{agent_resource_name}"
+    if "lowCodeAgentDefinition" in api_payload:
+      update_mask = "displayName,description,lowCodeAgentDefinition"
+    else:
+      update_mask = "displayName,description,starterPrompts,noCodeAgentDefinition"
+    patch_url = f"{base_url}/{agent_resource_name}?updateMask={update_mask}"
+    api_payload["name"] = agent_resource_name
     print(f"[push] Updating existing agent: {agent_resource_name}")
-    resp = requests.patch(patch_url, headers=headers, json=hydrated_agent, timeout=60)
-    resp.raise_for_status()
+    resp = requests.patch(patch_url, headers=headers, json=api_payload, timeout=60)
+    if not resp.ok:
+      raise RuntimeError(f"UpdateAgent failed ({resp.status_code}): {resp.text}")
     saved_agent = resp.json()
   else:
     create_url = f"{base_url}/{assistant_parent}/agents"
     print(f"[push] Creating new agent in: {assistant_parent}/agents")
-    resp = requests.post(create_url, headers=headers, json=hydrated_agent, timeout=60)
-    resp.raise_for_status()
+    resp = requests.post(create_url, headers=headers, json=api_payload, timeout=60)
+    if not resp.ok:
+      raise RuntimeError(f"CreateAgent failed ({resp.status_code}): {resp.text}")
     saved_agent = resp.json()
     agent_resource_name = saved_agent["name"]
 
@@ -273,9 +327,9 @@ def cmd_push(args: argparse.Namespace) -> None:
   print(f"[push] Agent resource saved: {agent_resource_name} (ID: {resolved_agent_id})")
 
   # Trigger :deployLowCode if lowCodeAgentDefinition is present, else :deploy
-  if "lowCodeAgentDefinition" in hydrated_agent:
+  if "lowCodeAgentDefinition" in api_payload:
     deploy_url = f"{base_url}/{agent_resource_name}:deployLowCode"
-    deploy_body = {"name": agent_resource_name}
+    deploy_body = {"name": agent_resource_name, "deployMode": "DEPLOY"}
     print(f"[push] Compiling & deploying Low-Code/No-Code nodes via: {deploy_url}")
   else:
     deploy_url = f"{base_url}/{agent_resource_name}:deploy"
@@ -283,7 +337,8 @@ def cmd_push(args: argparse.Namespace) -> None:
     print(f"[push] Deploying agent via: {deploy_url}")
 
   deploy_resp = requests.post(deploy_url, headers=headers, json=deploy_body, timeout=120)
-  deploy_resp.raise_for_status()
+  if not deploy_resp.ok:
+    raise RuntimeError(f"Deploy failed ({deploy_resp.status_code}): {deploy_resp.text}")
   print(f"[push] Successfully deployed agent '{hydrated_agent.get('displayName')}' (ID: {resolved_agent_id})")
 
   if args.output_agent_id_file:
@@ -297,6 +352,7 @@ def cmd_request_review(args: argparse.Namespace) -> None:
   location = env_vars.get("GE_LOCATION", "global")
   engine_id = env_vars["GE_ENGINE_ID"]
   agent_id = args.agent_id or env_vars["GE_AGENT_ID"]
+  sharing_scope = env_vars.get("GE_SHARING_SCOPE", "RESTRICTED")
 
   base_url = get_api_base_url(location)
   agent_name = f"{get_assistant_parent(project_id, location, engine_id)}/agents/{agent_id}"
@@ -307,47 +363,82 @@ def cmd_request_review(args: argparse.Namespace) -> None:
     return
 
   headers = get_auth_headers(project_id)
-  resp = requests.post(url, headers=headers, json={"name": agent_name}, timeout=30)
-  resp.raise_for_status()
-  print(f"[request-review] Agent review requested for: {agent_name}")
+  get_resp = requests.get(f"{base_url}/{agent_name}", headers=headers, timeout=30)
+  get_resp.raise_for_status()
+  current_state = get_resp.json().get("state", "PRIVATE")
+
+  if current_state == "PRIVATE":
+    resp = requests.post(url, headers=headers, json={"name": agent_name}, timeout=30)
+    if not resp.ok:
+      raise RuntimeError(f"RequestAgentReview failed ({resp.status_code}): {resp.text}")
+    new_state = resp.json().get("state")
+    print(f"[request-review] Agent review requested for: {agent_name} (state: {current_state} -> {new_state})")
+  else:
+    print(f"[request-review] Agent {agent_name} is already in state '{current_state}' (out of PRIVATE).")
+
+  if sharing_scope and sharing_scope != "PRIVATE":
+    patch_url = f"{base_url}/{agent_name}?updateMask=sharingConfig"
+    patch_body = {"name": agent_name, "sharingConfig": {"scope": sharing_scope}}
+    patch_resp = requests.patch(patch_url, headers=headers, json=patch_body, timeout=30)
+    if patch_resp.ok:
+      print(f"[request-review] Updated sharingConfig.scope -> {sharing_scope}")
 
 
 def cmd_publish(args: argparse.Namespace) -> None:
-  """Creates an immutable AgentRevision and publishes the agent (:publish) in PRD."""
+  """Enables, updates sharing scope, and creates/links an immutable AgentRevision (:publish) in PRD."""
   env_vars = load_env_vars(args.vars_file)
   project_id = env_vars["GE_PROJECT_ID"]
   location = env_vars.get("GE_LOCATION", "global")
   engine_id = env_vars["GE_ENGINE_ID"]
   agent_id = args.agent_id or env_vars["GE_AGENT_ID"]
+  sharing_scope = env_vars.get("GE_SHARING_SCOPE", "ALL_USERS")
 
   base_url = get_api_base_url(location)
   agent_name = f"{get_assistant_parent(project_id, location, engine_id)}/agents/{agent_id}"
-  revisions_url = f"{base_url}/{agent_name}/revisions"
   publish_url = f"{base_url}/{agent_name}:publish"
-
-  revision_payload = {
-      "versionDescription": args.version_description or f"CI/CD automated release ({env_vars.get('ENV', 'prd')})"
-  }
+  label = args.version_description or f"CI/CD automated release ({env_vars.get('ENV', 'prd')})"
 
   if args.dry_run:
-    print(f"[publish] --dry-run: POST {revisions_url} with {json.dumps(revision_payload)}")
-    print(f"[publish] --dry-run: POST {publish_url}")
+    print(f"[publish] --dry-run: POST {publish_url} with label='{label}' and sharingConfig.scope='{sharing_scope}'")
     return
 
   headers = get_auth_headers(project_id)
-  print(f"[publish] Creating immutable AgentRevision at: {revisions_url}")
-  rev_resp = requests.post(revisions_url, headers=headers, json=revision_payload, timeout=60)
-  rev_resp.raise_for_status()
-  revision_data = rev_resp.json()
-  revision_id = revision_data.get("revisionId")
+  get_resp = requests.get(f"{base_url}/{agent_name}", headers=headers, timeout=30)
+  get_resp.raise_for_status()
+  current_state = get_resp.json().get("state", "PRIVATE")
 
-  print(f"[publish] Publishing agent revision (revisionId={revision_id}) at: {publish_url}")
-  pub_body: Dict[str, Any] = {"name": agent_name}
-  if revision_id:
-    pub_body["revisionId"] = revision_id
+  if current_state == "PRIVATE":
+    rev_url = f"{base_url}/{agent_name}:requestAgentReview"
+    rev_resp = requests.post(rev_url, headers=headers, json={"name": agent_name}, timeout=30)
+    if not rev_resp.ok:
+      raise RuntimeError(f"RequestAgentReview failed ({rev_resp.status_code}): {rev_resp.text}")
+    current_state = rev_resp.json().get("state", current_state)
+    print(f"[publish] Transitioned agent out of PRIVATE -> {current_state}")
+
+  if current_state in ("DISABLED", "SUSPENDED"):
+    enable_url = f"{base_url}/{agent_name}:enableAgent"
+    en_resp = requests.post(enable_url, headers=headers, json={"name": agent_name}, timeout=30)
+    if not en_resp.ok:
+      raise RuntimeError(f"EnableAgent failed ({en_resp.status_code}): {en_resp.text}")
+    current_state = en_resp.json().get("state", "ENABLED")
+    print(f"[publish] Enabled agent -> {current_state}")
+
+  if sharing_scope:
+    patch_url = f"{base_url}/{agent_name}?updateMask=sharingConfig"
+    patch_body = {"name": agent_name, "sharingConfig": {"scope": sharing_scope}}
+    patch_resp = requests.patch(patch_url, headers=headers, json=patch_body, timeout=30)
+    if not patch_resp.ok:
+      raise RuntimeError(f"Updating sharingConfig failed ({patch_resp.status_code}): {patch_resp.text}")
+    print(f"[publish] Updated sharingConfig.scope -> {sharing_scope}")
+
+  print(f"[publish] Publishing agent snapshot (label='{label}') at: {publish_url}")
+  pub_body: Dict[str, Any] = {"name": agent_name, "label": label}
   pub_resp = requests.post(publish_url, headers=headers, json=pub_body, timeout=60)
-  pub_resp.raise_for_status()
-  print(f"[publish] Successfully published agent {agent_name} (revisionId={revision_id})")
+  if not pub_resp.ok:
+    raise RuntimeError(f"PublishAgent failed ({pub_resp.status_code}): {pub_resp.text}")
+  published_agent = pub_resp.json().get("agent", {})
+  active_rev = published_agent.get("activeRevision", "")
+  print(f"[publish] Successfully published agent {agent_name} (activeRevision={active_rev})")
 
 
 def cmd_rollback(args: argparse.Namespace) -> None:

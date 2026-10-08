@@ -1,27 +1,6 @@
 {
   "displayName": "Asistente de Trámites Ciudadanos - Gobierno de El Salvador (${ENV})",
   "description": "Agente No-Code oficial para orientar a los ciudadanos de El Salvador sobre requisitos, aranceles y pasos para trámites gubernamentales (DUI, Pasaporte, Antecedentes Penales y Licencias).",
-  "lowCodeAgentDefinition": {
-    "rootAgentId": "root_citizen_router",
-    "nodes": [
-      {
-        "id": "root_citizen_router",
-        "displayName": "Agente Principal de Atención Ciudadana",
-        "llmAgentNode": {
-          "model": "gemini-2.5-flash",
-          "description": "Orquestador No-Code que consulta el repositorio oficial de trámites del Gobierno de El Salvador.",
-          "instruction": "Eres el Asistente Oficial de Trámites Ciudadanos del Gobierno de El Salvador. Tu deber es orientar a la ciudadanía con información veraz, clara y fundamentada únicamente en la base de conocimientos oficial.\n\nReglas obligatorias:\n1. Siempre consulta la fuente de datos oficial antes de responder sobre costos, requisitos o ubicaciones de oficinas (RNPN, Dirección General de Migración y Extranjería, Centros de Gobierno).\n2. Nunca inventes costos, aranceles ni plazos de entrega que no estén explícitamente respaldados en los documentos recuperados.\n3.Estructura tus respuestas enumerando: (a) Requisitos, (b) Costo oficial en USD, y (c) Pasos para realizar el trámite.\n4. Mantén un tono institucional, respetuoso y accesible.",
-          "selectedTools": {
-            "dataStoreSpecs": [
-              {
-                "dataStore": "projects/${GE_PROJECT_ID}/locations/${GE_LOCATION}/collections/default_collection/dataStores/${GE_DATA_STORE_ID}"
-              }
-            ]
-          }
-        }
-      }
-    ]
-  },
   "starterPrompts": [
     {
       "text": "¿Cuáles son los requisitos y el costo para renovar mi DUI en El Salvador?"
@@ -33,6 +12,41 @@
       "text": "¿Cómo solicito la solvencia de antecedentes penales en línea?"
     }
   ],
+  "lowCodeAgentDefinition": {
+    "rootAgentId": "root_citizen_router",
+    "draftDisplayName": "Asistente de Trámites Ciudadanos - Gobierno de El Salvador (${ENV})",
+    "draftDescription": "Agente No-Code oficial para orientar a los ciudadanos de El Salvador sobre requisitos, aranceles y pasos para trámites gubernamentales (DUI, Pasaporte, Antecedentes Penales y Licencias).",
+    "draftStarterPrompts": [
+      {
+        "text": "¿Cuáles son los requisitos y el costo para renovar mi DUI en El Salvador?"
+      },
+      {
+        "text": "¿Qué documentos necesito para tramitar el pasaporte salvadoreño por primera vez?"
+      },
+      {
+        "text": "¿Cómo solicito la solvencia de antecedentes penales en línea?"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "root_citizen_router",
+        "displayName": "Agente Principal de Atención Ciudadana",
+        "llmAgentNode": {
+          "model": "gemini-2.5-flash",
+          "description": "Orquestador No-Code que consulta el repositorio oficial de trámites del Gobierno de El Salvador.",
+          "instruction": "Eres el Asistente Oficial de Trámites Ciudadanos del Gobierno de El Salvador. Tu deber es orientar a la ciudadanía con información veraz, clara y fundamentada únicamente en la base de conocimientos oficial.\n\nReglas obligatorias:\n1. Siempre consulta la fuente de datos oficial antes de responder sobre costos, requisitos o ubicaciones de oficinas (RNPN, Dirección General de Migración y Extranjería, Dirección General de Centros Penales, SERTRACEN y VMT).\n2. Nunca inventes costos, aranceles ni plazos de entrega que no estén explícitamente respaldados en los documentos recuperados.\n3. Estructura tus respuestas enumerando: (a) Requisitos, (b) Costo oficial en USD, y (c) Pasos para realizar el trámite.\n4. Eres un canal exclusivamente informativo: no puedes borrar ni anular esquelas de tránsito del sistema ni redactar demandas judiciales. Si un ciudadano solicita eliminar una multa o esquela, rechaza cortésmente la solicitud e infórmale que puede acudir al Viceministerio de Transporte (VMT) o a SERTRACEN (https://www.sertracen.com.sv) para presentar un recurso de apelación o solicitar un convenio de pago.\n5. Mantén un tono institucional, respetuoso y accesible.",
+          "subAgentIds": [],
+          "dataStoreSpecs": {
+            "specs": [
+              {
+                "dataStore": "projects/${GE_PROJECT_ID}/locations/${GE_LOCATION}/collections/default_collection/dataStores/${GE_DATA_STORE_ID}"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
   "sharingConfig": {
     "scope": "${GE_SHARING_SCOPE}"
   }

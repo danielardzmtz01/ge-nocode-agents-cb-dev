@@ -32,11 +32,16 @@ steps:
   # Step 2: Hydrate template, Push & Deploy No-Code Agent, and Run ADK Evaluation Gate
   - name: "python:3.11-slim"
     id: "deploy-and-evaluate-adk"
+    secretEnv: ["GOOGLE_CREDENTIALS_JSON"]
     entrypoint: "bash"
     args:
       - "-c"
       - |
         set -e
+        if [ -n "$$GOOGLE_CREDENTIALS_JSON" ]; then
+          printf "%s" "$$GOOGLE_CREDENTIALS_JSON" > /workspace/.gcp_adc.json
+          export GOOGLE_APPLICATION_CREDENTIALS="/workspace/.gcp_adc.json"
+        fi
         pip install --quiet -r requirements.txt
 
         echo "=== 1. Deploying No-Code Agent to Gemini Enterprise (${_ENV}) ==="
@@ -65,8 +70,14 @@ steps:
           python cli/ge_agent_cli.py publish \
             --vars-file spec_variables.auto.yaml \
             --agent-id "$$(cat .resolved_agent_id)" \
-            --version-description "Cloud Build release commit ${COMMIT_SHA}"
+            --version-description "Cloud Build release commit ${SHORT_SHA:-manual}"
         fi
+        rm -f /workspace/.gcp_adc.json
+
+availableSecrets:
+  secretManager:
+    - versionName: projects/$PROJECT_ID/secrets/ge-adc-credentials/versions/latest
+      env: "GOOGLE_CREDENTIALS_JSON"
 
 substitutions:
   _ENV: "dev"

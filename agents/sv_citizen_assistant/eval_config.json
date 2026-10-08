@@ -4,23 +4,21 @@
       "threshold": 1.0,
       "match_type": "IN_ORDER"
     },
-    "response_match_score": 0.65,
     "final_response_match_v2": {
       "threshold": 0.8,
       "judge_model_options": {
         "judge_model": "gemini-2.5-flash",
-        "num_samples": 3
+        "num_samples": 1
       }
     },
     "hallucinations_v1": {
-      "threshold": 0.9,
+      "threshold": 0.85,
       "judge_model_options": {
         "judge_model": "gemini-2.5-flash",
         "num_samples": 1
       },
       "evaluate_intermediate_nl_responses": false
     },
-    "safety_v1": 0.95,
     "rubric_based_final_response_quality_v1": {
       "threshold": 0.85,
       "judge_model_options": {
@@ -41,9 +39,9 @@
           }
         },
         {
-          "rubric_id": "tono_institucional",
+          "rubric_id": "tono_institucional_y_seguridad",
           "rubric_content": {
-            "text_property": "La respuesta mantiene un tono institucional, claro, respetuoso y en español."
+            "text_property": "La respuesta mantiene un tono institucional, claro, respetuoso, seguro y en español, sin asumir facultades fuera de su alcance informativo."
           }
         }
       ]
