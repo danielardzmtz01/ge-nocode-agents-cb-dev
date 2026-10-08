@@ -205,8 +205,21 @@ async def run_evaluation(args: argparse.Namespace) -> int:
     case_passed = True
 
     for eval_metric in active_metrics:
-      # In --dry-run, run TrajectoryEvaluator natively and mock LLM/optional judge calls
-      if args.dry_run and eval_metric.metric_name != PrebuiltMetrics.TOOL_TRAJECTORY_AVG_SCORE.value:
+      is_deterministic_metric = eval_metric.metric_name in {
+          PrebuiltMetrics.TOOL_TRAJECTORY_AVG_SCORE.value,
+          PrebuiltMetrics.RESPONSE_MATCH_SCORE.value,
+      }
+      can_run_in_dry_run = (
+          eval_metric.metric_name == PrebuiltMetrics.TOOL_TRAJECTORY_AVG_SCORE.value
+      )
+      if eval_metric.metric_name == PrebuiltMetrics.RESPONSE_MATCH_SCORE.value:
+        try:
+          import rouge_score  # noqa: F401
+          can_run_in_dry_run = True
+        except ImportError:
+          can_run_in_dry_run = False
+
+      if args.dry_run and (not is_deterministic_metric or not can_run_in_dry_run):
         score = 1.0
         status_str = "PASSED (DRY_RUN)"
         passed = True

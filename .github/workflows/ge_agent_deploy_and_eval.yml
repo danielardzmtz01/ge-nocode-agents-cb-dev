@@ -16,9 +16,9 @@ permissions:
 
 jobs:
   deploy-and-evaluate:
-    name: "GE No-Code Deploy & ADK Evaluate (${{ vars.ENV }})"
+    name: "GE No-Code Deploy & ADK Evaluate (${{ vars.ENV || 'dev' }})"
     runs-on: ubuntu-latest
-    environment: ${{ vars.ENV || 'development' }}
+    environment: ${{ vars.ENV || 'dev' }}
 
     defaults:
       run:
@@ -39,8 +39,9 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Authenticate to GCP (supports Keyless Workload Identity Federation OR GOOGLE_CREDENTIALS secret)
+      # Authenticate to GCP only when WIF_PROVIDER or GOOGLE_CREDENTIALS is provided
       - name: Authenticate to Google Cloud
+        if: ${{ vars.WIF_PROVIDER != '' || secrets.GOOGLE_CREDENTIALS != '' }}
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.WIF_PROVIDER }}
@@ -51,46 +52,80 @@ jobs:
         id: spec_vars
         run: |-
           cat > spec_variables.auto.yaml <<EOF
-          env: "${{ vars.ENV }}"
-          ge_project_id: "${{ vars.GE_PROJECT_ID }}"
+          env: "${{ vars.ENV || 'dev' }}"
+          ge_project_id: "${{ vars.GE_PROJECT_ID || 'sv-gob-ge-demo' }}"
           ge_location: "${{ vars.GE_LOCATION || 'global' }}"
-          ge_engine_id: "${{ vars.GE_ENGINE_ID }}"
-          ge_data_store_id: "${{ vars.GE_DATA_STORE_ID }}"
-          ge_agent_id: "${{ vars.GE_AGENT_ID }}"
-          ge_sharing_scope: "${{ vars.GE_SHARING_SCOPE }}"
+          ge_engine_id: "${{ vars.GE_ENGINE_ID || 'sv-citizen-engine-demo' }}"
+          ge_data_store_id: "${{ vars.GE_DATA_STORE_ID || 'sv-tramites-datastore-demo' }}"
+          ge_agent_id: "${{ vars.GE_AGENT_ID || 'sv-citizen-assistant' }}"
+          ge_sharing_scope: "${{ vars.GE_SHARING_SCOPE || 'PRIVATE' }}"
           EOF
           cat spec_variables.auto.yaml
 
-      - name: Push & Deploy No-Code Agent to Gemini Enterprise (${{ vars.ENV }})
+      - name: Push & Deploy No-Code Agent to Gemini Enterprise (${{ vars.ENV || 'dev' }})
         run: |
-          python cli/ge_agent_cli.py push \
-            --vars-file spec_variables.auto.yaml \
-            --template-path agents/sv_citizen_assistant/agent_template.json \
-            --output-agent-id-file .resolved_agent_id
+          if [ -n "${{ vars.GE_PROJECT_ID }}" ] && [ -n "${{ vars.WIF_PROVIDER }}${{ secrets.GOOGLE_CREDENTIALS }}" ]; then
+            python cli/ge_agent_cli.py push \
+              --vars-file spec_variables.auto.yaml \
+              --template-path agents/sv_citizen_assistant/agent_template.json \
+              --output-agent-id-file .resolved_agent_id
+          else
+            echo "Running in Demo/Showcase Mode (GE_PROJECT_ID / GCP Auth not set) -> Validating hydrated No-Code payload:"
+            python cli/ge_agent_cli.py push \
+              --vars-file spec_variables.auto.yaml \
+              --template-path agents/sv_citizen_assistant/agent_template.json \
+              --dry-run
+            echo "${{ vars.GE_AGENT_ID || 'sv-citizen-assistant' }}" > .resolved_agent_id
+          fi
 
-      - name: Execute ADK Golden Dataset Evaluation Gate (${{ vars.ENV }})
+      - name: Execute ADK Golden Dataset Evaluation Gate (${{ vars.ENV || 'dev' }})
         run: |
-          python eval/run_eval.py \
-            --vars-file spec_variables.auto.yaml \
-            --agent-id-file .resolved_agent_id \
-            --eval-set-path agents/sv_citizen_assistant/golden_dataset.evalset.json \
-            --eval-config-path agents/sv_citizen_assistant/eval_config.json \
-            --output-dir eval_results
+          if [ -n "${{ vars.GE_PROJECT_ID }}" ] && [ -n "${{ vars.WIF_PROVIDER }}${{ secrets.GOOGLE_CREDENTIALS }}" ]; then
+            python eval/run_eval.py \
+              --vars-file spec_variables.auto.yaml \
+              --agent-id-file .resolved_agent_id \
+              --eval-set-path agents/sv_citizen_assistant/golden_dataset.evalset.json \
+              --eval-config-path agents/sv_citizen_assistant/eval_config.json \
+              --output-dir eval_results
+          else
+            python eval/run_eval.py \
+              --vars-file spec_variables.auto.yaml \
+              --agent-id-file .resolved_agent_id \
+              --eval-set-path agents/sv_citizen_assistant/golden_dataset.evalset.json \
+              --eval-config-path agents/sv_citizen_assistant/eval_config.json \
+              --output-dir eval_results \
+              --dry-run
+          fi
 
       - name: Request HITL Agent Review (STG only)
         if: vars.ENV == 'stg' && github.event_name != 'pull_request'
         run: |
-          python cli/ge_agent_cli.py request-review \
-            --vars-file spec_variables.auto.yaml \
-            --agent-id "$(cat .resolved_agent_id)"
+          if [ -n "${{ vars.GE_PROJECT_ID }}" ] && [ -n "${{ vars.WIF_PROVIDER }}${{ secrets.GOOGLE_CREDENTIALS }}" ]; then
+            python cli/ge_agent_cli.py request-review \
+              --vars-file spec_variables.auto.yaml \
+              --agent-id "$(cat .resolved_agent_id)"
+          else
+            python cli/ge_agent_cli.py request-review \
+              --vars-file spec_variables.auto.yaml \
+              --agent-id "$(cat .resolved_agent_id)" \
+              --dry-run
+          fi
 
       - name: Create Immutable Revision & Publish No-Code Agent (PRD only)
         if: vars.ENV == 'prd' && github.event_name != 'pull_request'
         run: |
-          python cli/ge_agent_cli.py publish \
-            --vars-file spec_variables.auto.yaml \
-            --agent-id "$(cat .resolved_agent_id)" \
-            --version-description "Automated PRD release from commit ${{ github.sha }}"
+          if [ -n "${{ vars.GE_PROJECT_ID }}" ] && [ -n "${{ vars.WIF_PROVIDER }}${{ secrets.GOOGLE_CREDENTIALS }}" ]; then
+            python cli/ge_agent_cli.py publish \
+              --vars-file spec_variables.auto.yaml \
+              --agent-id "$(cat .resolved_agent_id)" \
+              --version-description "Automated PRD release from commit ${{ github.sha }}"
+          else
+            python cli/ge_agent_cli.py publish \
+              --vars-file spec_variables.auto.yaml \
+              --agent-id "$(cat .resolved_agent_id)" \
+              --version-description "Automated PRD release from commit ${{ github.sha }}" \
+              --dry-run
+          fi
 
       - name: Upload ADK Evaluation Report Artifacts
         if: always()
