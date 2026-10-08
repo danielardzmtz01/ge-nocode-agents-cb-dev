@@ -376,19 +376,22 @@ def cmd_rollback(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(
-      description="Gemini Enterprise No-Code / Low-Code Agent GitOps CLI (dev -> stg -> prd)"
-  )
-  parser.add_argument(
+  parent_parser = argparse.ArgumentParser(add_help=False)
+  parent_parser.add_argument(
       "--vars-file",
       default="spec_variables.auto.yaml",
       help="Path to in-place generated environment variables YAML file (default: spec_variables.auto.yaml)",
   )
 
+  parser = argparse.ArgumentParser(
+      description="Gemini Enterprise No-Code / Low-Code Agent GitOps CLI (dev -> stg -> prd)",
+      parents=[parent_parser],
+  )
+
   subparsers = parser.add_subparsers(dest="command", required=True)
 
   # pull
-  p_pull = subparsers.add_parser("pull", help="Export agent from GE and parameterize into agent_template.json")
+  p_pull = subparsers.add_parser("pull", parents=[parent_parser], help="Export agent from GE and parameterize into agent_template.json")
   p_pull.add_argument("--project-id", help="GCP Project ID")
   p_pull.add_argument("--location", default="global", help="Discovery Engine location (global, us, eu)")
   p_pull.add_argument("--engine-id", help="Gemini Enterprise Engine ID")
@@ -402,7 +405,7 @@ def build_parser() -> argparse.ArgumentParser:
   p_pull.set_defaults(func=cmd_pull)
 
   # push
-  p_push = subparsers.add_parser("push", help="Hydrate agent_template.json and deploy to target GE environment")
+  p_push = subparsers.add_parser("push", parents=[parent_parser], help="Hydrate agent_template.json and deploy to target GE environment")
   p_push.add_argument(
       "--template-path",
       default="agents/sv_citizen_assistant/agent_template.json",
@@ -414,20 +417,20 @@ def build_parser() -> argparse.ArgumentParser:
   p_push.set_defaults(func=cmd_push)
 
   # request-review
-  p_rev = subparsers.add_parser("request-review", help="Trigger :requestAgentReview for HITL validation in STG")
+  p_rev = subparsers.add_parser("request-review", parents=[parent_parser], help="Trigger :requestAgentReview for HITL validation in STG")
   p_rev.add_argument("--agent-id", help="Agent ID")
   p_rev.add_argument("--dry-run", action="store_true")
   p_rev.set_defaults(func=cmd_request_review)
 
   # publish
-  p_pub = subparsers.add_parser("publish", help="Create immutable revision and :publish agent in PRD")
+  p_pub = subparsers.add_parser("publish", parents=[parent_parser], help="Create immutable revision and :publish agent in PRD")
   p_pub.add_argument("--agent-id", help="Agent ID")
   p_pub.add_argument("--version-description", help="Description for the immutable AgentRevision")
   p_pub.add_argument("--dry-run", action="store_true")
   p_pub.set_defaults(func=cmd_publish)
 
   # rollback
-  p_rb = subparsers.add_parser("rollback", help="Rollback agent in PRD to a previous revision (:rollback)")
+  p_rb = subparsers.add_parser("rollback", parents=[parent_parser], help="Rollback agent in PRD to a previous revision (:rollback)")
   p_rb.add_argument("--agent-id", help="Agent ID")
   p_rb.add_argument("--revision-id", help="Target revision ID to roll back to")
   p_rb.add_argument("--dry-run", action="store_true")
