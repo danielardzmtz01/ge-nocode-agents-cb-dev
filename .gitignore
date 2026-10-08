@@ -1,0 +1,15 @@
+# In-place generated CI/CD environment variables (generated at runtime like *.auto.tfvars)
+*.auto.yaml
+*.auto.json
+
+# Evaluation outputs & reports
+eval_results/
+*.eval_report.json
+*.eval_report.md
+
+# Python cache & virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env

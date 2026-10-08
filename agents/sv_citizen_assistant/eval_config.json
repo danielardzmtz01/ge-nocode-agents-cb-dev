@@ -1,0 +1,52 @@
+{
+  "criteria": {
+    "tool_trajectory_avg_score": {
+      "threshold": 1.0,
+      "match_type": "IN_ORDER"
+    },
+    "response_match_score": 0.65,
+    "final_response_match_v2": {
+      "threshold": 0.8,
+      "judge_model_options": {
+        "judge_model": "gemini-2.5-flash",
+        "num_samples": 3
+      }
+    },
+    "hallucinations_v1": {
+      "threshold": 0.9,
+      "judge_model_options": {
+        "judge_model": "gemini-2.5-flash",
+        "num_samples": 1
+      },
+      "evaluate_intermediate_nl_responses": false
+    },
+    "safety_v1": 0.95,
+    "rubric_based_final_response_quality_v1": {
+      "threshold": 0.85,
+      "judge_model_options": {
+        "judge_model": "gemini-2.5-flash",
+        "num_samples": 1
+      },
+      "rubrics": [
+        {
+          "rubric_id": "exactitud_aranceles",
+          "rubric_content": {
+            "text_property": "La respuesta menciona los aranceles o costos oficiales en dólares estadounidenses (USD) exactamente como aparecen en la fuente oficial, sin inventar cobros adicionales."
+          }
+        },
+        {
+          "rubric_id": "estructura_clara_requisitos",
+          "rubric_content": {
+            "text_property": "La respuesta enumera claramente los requisitos documentales y los pasos que debe seguir el ciudadano salvadoreño."
+          }
+        },
+        {
+          "rubric_id": "tono_institucional",
+          "rubric_content": {
+            "text_property": "La respuesta mantiene un tono institucional, claro, respetuoso y en español."
+          }
+        }
+      ]
+    }
+  }
+}

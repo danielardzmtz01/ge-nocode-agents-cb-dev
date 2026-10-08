@@ -1,0 +1,39 @@
+# Google Cloud Build pipeline: "Send To Next Environment" (dev -> stg -> prd)
+#
+# Mirrors `.github/workflows/deployment_actions.yml` for teams orchestrating CI/CD with Cloud Build.
+# Can be configured with Cloud Build Approval Gate enabled before promoting `stg -> prd`.
+#
+# Trigger Substitutions:
+#   _ENV: "dev" | "stg"
+#   _TARGET_ENV: "stg" | "prd"
+#   _SOURCE_REPO_FN: e.g. "gob-sv/ge-nocode-agents-dev.git"
+#   _SOURCE_REPO_SN: e.g. "ge-nocode-agents-dev"
+#   _TARGET_REPO_FN: e.g. "gob-sv/ge-nocode-agents-stg.git"
+
+steps:
+  - name: "gcr.io/cloud-builders/git"
+    id: "send-to-next-environment"
+    secretEnv: ["TOKEN_USER"]
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -e
+        if [ "${_ENV}" = "prd" ]; then
+          echo "Repository is already PRD. Skipping promotion."
+          exit 0
+        fi
+        echo "Cloud Build action to push from ${_SOURCE_REPO_FN} to ${_TARGET_ENV} (${_TARGET_REPO_FN})"
+        git clone https://$$TOKEN_USER:x-oauth-basic@github.com/${_SOURCE_REPO_FN}
+        cd ${_SOURCE_REPO_SN}
+        git checkout main
+        git remote add target-repo https://$$TOKEN_USER:x-oauth-basic@github.com/${_TARGET_REPO_FN}
+        git push -u target-repo main --force
+
+availableSecrets:
+  secretManager:
+    - versionName: projects/$PROJECT_ID/secrets/github-token-user/versions/latest
+      env: "TOKEN_USER"
+
+options:
+  logging: CLOUD_LOGGING_ONLY

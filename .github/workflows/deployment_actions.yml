@@ -1,0 +1,44 @@
+name: Send To Next Environment
+
+# Controls when the workflow will run (promotes dev -> stg and stg -> prd)
+on:
+  # Can be triggered manually from the Actions tab (after ADK Eval & HITL review)
+  # or automatically upon main branch push if desired.
+  workflow_dispatch:
+
+jobs:
+  non-production-deploy:
+    if: "!contains(github.repository, 'prd')"
+    runs-on: ubuntu-latest
+    environment: promote-to-${{ vars.TARGET_ENV }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies & Verify ADK Pre-Promotion Gate
+        run: |
+          pip install -r requirements.txt
+          cat > spec_variables.auto.yaml <<EOF
+          env: "${{ vars.ENV }}"
+          ge_project_id: "${{ vars.GE_PROJECT_ID }}"
+          ge_location: "${{ vars.GE_LOCATION || 'global' }}"
+          ge_engine_id: "${{ vars.GE_ENGINE_ID }}"
+          ge_data_store_id: "${{ vars.GE_DATA_STORE_ID }}"
+          ge_agent_id: "${{ vars.GE_AGENT_ID }}"
+          EOF
+          python cli/ge_agent_cli.py push --vars-file spec_variables.auto.yaml --dry-run
+
+      - name: Deploy to ${{ vars.TARGET_ENV }}
+        run: |
+          echo "GitHub Action to promote No-Code Agent repository to ${{ vars.TARGET_ENV }}"
+          git clone https://${{ secrets.TOKEN_USER }}:x-oauth-basic@github.com/${{ vars.SOURCE_REPO_FN }}
+          cd ${{ vars.SOURCE_REPO_SN }}
+          git checkout main
+          git remote add target-repo https://${{ secrets.TOKEN_USER }}:x-oauth-basic@github.com/${{ vars.TARGET_REPO_FN }}
+          git push -u target-repo main --force

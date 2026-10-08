@@ -1,0 +1,79 @@
+{
+  "eval_set_id": "sv_citizen_assistant_golden_dataset_v1",
+  "name": "Golden Dataset - Asistente de Trámites Ciudadanos (Gobierno de El Salvador)",
+  "description": "Casos de prueba oficiales para certificar precisión de requisitos, aranceles, uso de Data Stores (Grounding) y ausencia de alucinaciones antes de promover entre dev -> stg -> prd.",
+  "eval_cases": [
+    {
+      "eval_id": "renovacion_dui_costo_y_requisitos",
+      "conversation": [
+        {
+          "invocation_id": "inv_dui_001",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "¿Cuáles son los requisitos y el costo para renovar mi DUI vencido en El Salvador?"
+              }
+            ]
+          },
+          "final_response": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "Para renovar su Documento Único de Identidad (DUI) vencido en El Salvador ante el RNPN, debe cumplir con lo siguiente:\n\n1. Requisitos:\n- Presentar su DUI vencido (o constancia en caso de extravío).\n- Comprobante de pago del trámite.\n\n2. Costo oficial:\n- El arancel oficial de renovación de DUI es de $10.31 USD (pagadero en bancos autorizados o en línea).\n\n3. Pasos:\n- Realice el pago de $10.31 USD.\n- Agende su cita en el portal oficial dui.sv o acuda a un Duicentro.\n- Presente su documento y realice la captura de datos biométricos."
+              }
+            ]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "vertex_ai_search",
+                "args": {
+                  "query": "¿Cuáles son los requisitos y el costo para renovar mi DUI vencido en El Salvador?"
+                }
+              }
+            ],
+            "intermediate_responses": [],
+            "tool_responses": []
+          }
+        }
+      ]
+    },
+    {
+      "eval_id": "emision_pasaporte_primera_vez",
+      "conversation": [
+        {
+          "invocation_id": "inv_pasaporte_001",
+          "user_content": {
+            "role": "user",
+            "parts": [
+              {
+                "text": "¿Qué documentos necesito y cuánto cuesta sacar el pasaporte salvadoreño por primera vez para un adulto?"
+              }
+            ]
+          },
+          "final_response": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "Para tramitar el pasaporte salvadoreño por primera vez para una persona mayor de edad ante la Dirección General de Migración y Extranjería:\n\n1. Requisitos:\n- DUI original vigente y en buen estado.\n- Comprobante de pago del arancel correspondiente.\n\n2. Costo oficial:\n- El costo del pasaporte dentro de El Salvador es de $25.00 USD.\n\n3. Pasos:\n- Cancela el arancel de $25.00 USD en línea o en colecturía autorizada.\n- Presenta tu DUI vigente en la sucursal de Migración y Extranjería seleccionada para la toma de fotografía y entrega de tu pasaporte."
+              }
+            ]
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "vertex_ai_search",
+                "args": {
+                  "query": "¿Qué documentos necesito y cuánto cuesta sacar el pasaporte salvadoreño por primera vez para un adulto?"
+                }
+              }
+            ],
+            "intermediate_responses": [],
+            "tool_responses": []
+          }
+        }
+      ]
+    }
+  ]
+}

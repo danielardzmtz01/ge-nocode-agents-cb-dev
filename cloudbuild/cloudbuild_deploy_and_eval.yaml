@@ -1,0 +1,78 @@
+# Google Cloud Build pipeline to deploy and evaluate Gemini Enterprise No-Code Agents in-place (dev / stg / prd)
+#
+# Trigger Substitutions per environment repository:
+#   _ENV: "dev" | "stg" | "prd"
+#   _GE_PROJECT_ID: GCP Project ID for the environment
+#   _GE_LOCATION: "global" (or "us" / "eu")
+#   _GE_ENGINE_ID: Gemini Enterprise Engine ID for the environment
+#   _GE_DATA_STORE_ID: Vertex AI Search Data Store ID for the environment
+#   _GE_AGENT_ID: Agent ID (optional if creating or matching by displayName)
+#   _GE_SHARING_SCOPE: "PRIVATE" (dev) | "RESTRICTED" (stg) | "ALL_USERS" (prd)
+
+steps:
+  # Step 1: Generate in-place environment configuration (spec_variables.auto.yaml)
+  - name: "python:3.11-slim"
+    id: "setup-spec-variables"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        cat > spec_variables.auto.yaml <<EOF
+        env: "${_ENV}"
+        ge_project_id: "${_GE_PROJECT_ID}"
+        ge_location: "${_GE_LOCATION}"
+        ge_engine_id: "${_GE_ENGINE_ID}"
+        ge_data_store_id: "${_GE_DATA_STORE_ID}"
+        ge_agent_id: "${_GE_AGENT_ID}"
+        ge_sharing_scope: "${_GE_SHARING_SCOPE}"
+        EOF
+        echo "Generated spec_variables.auto.yaml for environment ${_ENV}:"
+        cat spec_variables.auto.yaml
+
+  # Step 2: Hydrate template, Push & Deploy No-Code Agent, and Run ADK Evaluation Gate
+  - name: "python:3.11-slim"
+    id: "deploy-and-evaluate-adk"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -e
+        pip install --quiet -r requirements.txt
+
+        echo "=== 1. Deploying No-Code Agent to Gemini Enterprise (${_ENV}) ==="
+        python cli/ge_agent_cli.py push \
+          --vars-file spec_variables.auto.yaml \
+          --template-path agents/sv_citizen_assistant/agent_template.json \
+          --output-agent-id-file .resolved_agent_id
+
+        echo "=== 2. Running google-adk Golden Dataset Evaluation (${_ENV}) ==="
+        python eval/run_eval.py \
+          --vars-file spec_variables.auto.yaml \
+          --agent-id-file .resolved_agent_id \
+          --eval-set-path agents/sv_citizen_assistant/golden_dataset.evalset.json \
+          --eval-config-path agents/sv_citizen_assistant/eval_config.json \
+          --output-dir eval_results
+
+        if [ "${_ENV}" = "stg" ]; then
+          echo "=== 3. Requesting HITL Agent Review in STG (:requestAgentReview) ==="
+          python cli/ge_agent_cli.py request-review \
+            --vars-file spec_variables.auto.yaml \
+            --agent-id "$$(cat .resolved_agent_id)"
+        fi
+
+        if [ "${_ENV}" = "prd" ]; then
+          echo "=== 3. Creating Immutable AgentRevision & Publishing in PRD (:publish) ==="
+          python cli/ge_agent_cli.py publish \
+            --vars-file spec_variables.auto.yaml \
+            --agent-id "$$(cat .resolved_agent_id)" \
+            --version-description "Cloud Build release commit ${COMMIT_SHA}"
+        fi
+
+substitutions:
+  _ENV: "dev"
+  _GE_LOCATION: "global"
+  _GE_SHARING_SCOPE: "PRIVATE"
+  _GE_AGENT_ID: ""
+
+options:
+  logging: CLOUD_LOGGING_ONLY
