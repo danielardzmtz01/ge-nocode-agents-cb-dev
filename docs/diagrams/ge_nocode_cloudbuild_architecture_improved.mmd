@@ -1,0 +1,109 @@
+---
+config:
+  layout: elk
+  look: neo
+  theme: default
+themeVariables:
+  fontFamily: 'Roboto, Google Sans, Helvetica, Arial, sans-serif'
+  primaryColor: '#4285F4'
+  secondaryColor: '#34A853'
+  tertiaryColor: '#FBBC04'
+  mainBkg: '#FFFFFF'
+  nodeBorder: '#4285F4'
+  clusterBkg: '#F8F9FA'
+  clusterBorder: '#DADCE0'
+  lineColor: '#5F6368'
+  edgeLabelBackground: '#ffffff'
+---
+flowchart TD
+    subgraph ROW1[" "]
+        direction LR
+        subgraph SG_Design["1. Diseño & Exportación (UI a GitOps)"]
+            direction LR
+            Designer["`**Diseñador de Agentes**<br>Gobierno de El Salvador`"]:::gcpBlue
+            Designer@{ icon: "fa:user" }
+            GE_UI["`**GE Agent Designer UI**<br>No-Code / Low-Code`"]:::gcpBlue
+            GE_UI@{ icon: "gcp:vertexai" }
+            Pull_CLI["`**ge_agent_cli.py pull**<br>GetAgent + Parametrización`"]
+            Pull_CLI@{ icon: "logos:python" }
+
+            Designer --> GE_UI --> Pull_CLI
+        end
+    end
+
+    Pull_CLI --> wpA_src((("A"))):::wp_blue
+
+    subgraph SG_Dev["2. Proyecto GCP DEV (Folder GOES: goes-ge-cb-dev | ge-nocode-agents-cb-dev)"]
+        direction LR
+        wpA_dst((("A"))):::wp_blue
+        Repo_Dev["`**Repo GitHub DEV**<br>ge-nocode-agents-cb-dev`"]
+        Repo_Dev@{ icon: "logos:github" }
+        CB_Deploy_Dev["`**Cloud Build Deploy & Eval**<br>cloudbuild_deploy_and_eval.yaml (_ENV=dev)`"]:::gcpBlue
+        CB_Deploy_Dev@{ icon: "gcp:cloud-build" }
+        GE_Dev["`**Gemini Enterprise DEV**<br>:deployLowCode + :streamAssist ADK Gate`"]:::gcpGreen
+        GE_Dev@{ icon: "gcp:vertexai" }
+        SM_Dev["`**Secret Manager**<br>github-token-user + ge-adc-credentials`"]:::gcpBlue
+        SM_Dev@{ icon: "gcp:secret-manager" }
+        CB_Promo_Dev["`**Cloud Build Promote**<br>cloudbuild_deployment_actions.yaml`"]:::gcpBlue
+        CB_Promo_Dev@{ icon: "gcp:cloud-build" }
+
+        wpA_dst ==> Repo_Dev --> CB_Deploy_Dev --> GE_Dev --> CB_Promo_Dev
+        SM_Dev -.->|"Inyecta secretEnv"| CB_Promo_Dev
+    end
+
+    CB_Promo_Dev -->|"git push target-repo main --force<br>(Promoción DEV -> STG)"| wpB_src((("B"))):::wp_green
+
+    subgraph SG_Stg["3. Proyecto GCP STG + Aprobación HITL (Folder GOES: goes-ge-cb-stg | ge-nocode-agents-cb-stg)"]
+        direction LR
+        wpB_dst((("B"))):::wp_green
+        Repo_Stg["`**Repo GitHub STG**<br>ge-nocode-agents-cb-stg`"]
+        Repo_Stg@{ icon: "logos:github" }
+        CB_Deploy_Stg["`**Cloud Build Deploy & Eval**<br>cloudbuild_deploy_and_eval.yaml (_ENV=stg)`"]:::gcpYellow
+        CB_Deploy_Stg@{ icon: "gcp:cloud-build" }
+        GE_Stg["`**Gemini Enterprise STG**<br>:deployLowCode + ADK + :requestAgentReview`"]:::gcpYellow
+        GE_Stg@{ icon: "gcp:vertexai" }
+        HITL_Stg["`**Aprobación HITL**<br>Cloud Build Approval Gate + Scope RESTRICTED`"]:::gcpYellow
+        HITL_Stg@{ icon: "fa:user" }
+        CB_Promo_Stg["`**Cloud Build Promote**<br>cloudbuild_deployment_actions.yaml`"]:::gcpYellow
+        CB_Promo_Stg@{ icon: "gcp:cloud-build" }
+
+        wpB_dst ==> Repo_Stg --> CB_Deploy_Stg --> GE_Stg --> HITL_Stg --> CB_Promo_Stg
+    end
+
+    CB_Promo_Stg -->|"git push target-repo main --force<br>(Promoción STG -> PRD)"| wpC_src((("C"))):::wp_yellow
+
+    subgraph SG_Prd["4. Proyecto GCP PRD & Gobernanza (Folder GOES: goes-ge-cb-prd | ge-nocode-agents-cb-prd)"]
+        direction LR
+        wpC_dst((("C"))):::wp_yellow
+        Repo_Prd["`**Repo GitHub PRD**<br>ge-nocode-agents-cb-prd`"]
+        Repo_Prd@{ icon: "logos:github" }
+        CB_Deploy_Prd["`**Cloud Build Deploy & Eval**<br>cloudbuild_deploy_and_eval.yaml (_ENV=prd)`"]:::gcpGreen
+        CB_Deploy_Prd@{ icon: "gcp:cloud-build" }
+        GE_Prd["`**Gemini Enterprise PRD**<br>:deployLowCode + Smoke Test ADK`"]:::gcpGreen
+        GE_Prd@{ icon: "gcp:vertexai" }
+        Pub_Prd["`**Release Inmutable Ciudadano**<br>:publish + activeRevision`"]:::gcpRed
+        Pub_Prd@{ icon: "gcp:vertexai" }
+        Logs_Prd["`**Cloud Logging**<br>CLOUD_LOGGING_ONLY + Auditoría ADK`"]:::gcpBlue
+        Logs_Prd@{ icon: "gcp:cloud-logging" }
+
+        wpC_dst ==> Repo_Prd --> CB_Deploy_Prd --> GE_Prd --> Pub_Prd
+        CB_Deploy_Prd -.->|"Trazabilidad"| Logs_Prd
+    end
+
+    ROW1 ~~~ SG_Dev ~~~ SG_Stg ~~~ SG_Prd
+
+    classDef gcpBlue fill:#E8F0FE,stroke:#1967D2,stroke-width:2px,color:#000,font-family:Roboto;
+    classDef gcpGreen fill:#E6F4EA,stroke:#1E8E3E,stroke-width:2px,color:#000,font-family:Roboto;
+    classDef gcpYellow fill:#FEF7E0,stroke:#B06000,stroke-width:2px,color:#000,font-family:Roboto;
+    classDef gcpRed fill:#FCE8E6,stroke:#D93025,stroke-width:2px,color:#000,font-family:Roboto;
+    classDef neutral fill:#F1F3F4,stroke:#5F6368,stroke-width:2px,color:#000,font-family:Roboto;
+    classDef wp_blue fill:#1A73E8,stroke:#0D47A1,stroke-width:2px,color:#fff,font-weight:bold;
+    classDef wp_green fill:#34A853,stroke:#1B5E20,stroke-width:2px,color:#fff,font-weight:bold;
+    classDef wp_yellow fill:#FBBC04,stroke:#F29900,stroke-width:2px,color:#000,font-weight:bold;
+    classDef wp_red fill:#EA4335,stroke:#C5221F,stroke-width:2px,color:#fff,font-weight:bold;
+
+    style ROW1 fill:none,stroke:none
+    style SG_Design fill:#ffffff,stroke:#9E9E9E,stroke-dasharray:5 5,stroke-width:2px
+    style SG_Dev fill:#e8f0fe,stroke:#1967D2,stroke-width:2px
+    style SG_Stg fill:#f9f9f9,stroke:#DADCE0,stroke-width:2px
+    style SG_Prd fill:#e6f4ea,stroke:#1E8E3E,stroke-width:2px

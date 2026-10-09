@@ -1,0 +1,101 @@
+---
+config:
+  layout: elk
+  look: neo
+  theme: default
+themeVariables:
+  fontFamily: 'Roboto, Google Sans, Helvetica, Arial, sans-serif'
+  primaryColor: '#4285F4'
+  secondaryColor: '#34A853'
+  tertiaryColor: '#FBBC04'
+  mainBkg: '#FFFFFF'
+  nodeBorder: '#4285F4'
+  clusterBkg: '#F8F9FA'
+  clusterBorder: '#DADCE0'
+  lineColor: '#5F6368'
+  edgeLabelBackground: '#ffffff'
+---
+flowchart TD
+    subgraph ROW1[" "]
+        direction LR
+        subgraph SG_Design["1. Diseño & Exportación (UI a GitOps)"]
+            direction LR
+            Designer["`**Diseñador de Agentes**<br>Gobierno de El Salvador`"]:::gcpBlue
+            Designer@{ icon: "fa:user" }
+            GE_UI["`**GE Agent Designer UI**<br>No-Code / Low-Code`"]:::gcpBlue
+            GE_UI@{ icon: "gcp:vertexai" }
+            Pull_CLI["`**ge_agent_cli.py pull**<br>GetAgent + Parametrización`"]
+            Pull_CLI@{ icon: "logos:python" }
+
+            Designer --> GE_UI --> Pull_CLI
+        end
+    end
+
+    Pull_CLI --> wpA_src((("A"))):::wp_blue
+
+    subgraph SG_Dev["2. Ambiente DEV (Folder GOES: goes-ge-gha-dev | ge-nocode-agents-dev)"]
+        direction LR
+        wpA_dst((("A"))):::wp_blue
+        Repo_Dev["`**Repo GitHub DEV**<br>agent_template.json + EvalSet`"]
+        Repo_Dev@{ icon: "logos:github" }
+        CI_Dev["`**GitHub Actions**<br>Hidrata spec_variables.auto.yaml`"]:::gcpBlue
+        CI_Dev@{ icon: "gcp:cloud-build" }
+        GE_Dev["`**Gemini Enterprise DEV**<br>:deployLowCode (Scope: PRIVATE)`"]:::gcpBlue
+        GE_Dev@{ icon: "gcp:vertexai" }
+        ADK_Dev["`**Adapter :streamAssist -> ADK**<br>8 Casos Golden Dataset Gate`"]:::gcpGreen
+        ADK_Dev@{ icon: "gcp:vertexai" }
+
+        wpA_dst ==> Repo_Dev --> CI_Dev --> GE_Dev --> ADK_Dev
+    end
+
+    ADK_Dev -->|"Score >= Threshold (32/32 PASSED)<br>Send To Next Environment"| wpB_src((("B"))):::wp_green
+
+    subgraph SG_Stg["3. Ambiente STG + Revisión HITL (Folder GOES: goes-ge-gha-stg | ge-nocode-agents-stg)"]
+        direction LR
+        wpB_dst((("B"))):::wp_green
+        Repo_Stg["`**Repo GitHub STG**<br>Promoción In-Place (main)`"]
+        Repo_Stg@{ icon: "logos:github" }
+        CI_Stg["`**GitHub Actions**<br>Hidrata ENV=stg`"]:::gcpYellow
+        CI_Stg@{ icon: "gcp:cloud-build" }
+        GE_Stg["`**Gemini Enterprise STG**<br>:deployLowCode + :requestAgentReview`"]:::gcpYellow
+        GE_Stg@{ icon: "gcp:vertexai" }
+        HITL["`**Validación HITL + ADK Gate**<br>Scope: RESTRICTED (ENABLED)`"]:::gcpYellow
+        HITL@{ icon: "fa:user" }
+
+        wpB_dst ==> Repo_Stg --> CI_Stg --> GE_Stg --> HITL
+    end
+
+    HITL -->|"Aprobación HITL<br>Send To Next Environment"| wpC_src((("C"))):::wp_yellow
+
+    subgraph SG_Prd["4. Ambiente PRD & Gobernanza (Folder GOES: goes-ge-gha-prd | ge-nocode-agents-prd)"]
+        direction LR
+        wpC_dst((("C"))):::wp_yellow
+        Repo_Prd["`**Repo GitHub PRD**<br>Guard: !contains(prd)`"]
+        Repo_Prd@{ icon: "logos:github" }
+        CI_Prd["`**GitHub Actions**<br>Hidrata ENV=prd`"]:::gcpGreen
+        CI_Prd@{ icon: "gcp:cloud-build" }
+        GE_Prd["`**Gemini Enterprise PRD**<br>:deployLowCode + Smoke Test ADK`"]:::gcpGreen
+        GE_Prd@{ icon: "gcp:vertexai" }
+        Pub_Prd["`**Release Inmutable Ciudadano**<br>:publish + activeRevision`"]:::gcpRed
+        Pub_Prd@{ icon: "gcp:vertexai" }
+
+        wpC_dst ==> Repo_Prd --> CI_Prd --> GE_Prd --> Pub_Prd
+    end
+
+    ROW1 ~~~ SG_Dev ~~~ SG_Stg ~~~ SG_Prd
+
+    classDef gcpBlue fill:#E8F0FE,stroke:#1967D2,stroke-width:2px,color:#000,font-family:Roboto;
+    classDef gcpGreen fill:#E6F4EA,stroke:#1E8E3E,stroke-width:2px,color:#000,font-family:Roboto;
+    classDef gcpYellow fill:#FEF7E0,stroke:#B06000,stroke-width:2px,color:#000,font-family:Roboto;
+    classDef gcpRed fill:#FCE8E6,stroke:#D93025,stroke-width:2px,color:#000,font-family:Roboto;
+    classDef neutral fill:#F1F3F4,stroke:#5F6368,stroke-width:2px,color:#000,font-family:Roboto;
+    classDef wp_blue fill:#1A73E8,stroke:#0D47A1,stroke-width:2px,color:#fff,font-weight:bold;
+    classDef wp_green fill:#34A853,stroke:#1B5E20,stroke-width:2px,color:#fff,font-weight:bold;
+    classDef wp_yellow fill:#FBBC04,stroke:#F29900,stroke-width:2px,color:#000,font-weight:bold;
+    classDef wp_red fill:#EA4335,stroke:#C5221F,stroke-width:2px,color:#fff,font-weight:bold;
+
+    style ROW1 fill:none,stroke:none
+    style SG_Design fill:#ffffff,stroke:#9E9E9E,stroke-dasharray:5 5,stroke-width:2px
+    style SG_Dev fill:#e8f0fe,stroke:#1967D2,stroke-width:2px
+    style SG_Stg fill:#f9f9f9,stroke:#DADCE0,stroke-width:2px
+    style SG_Prd fill:#e6f4ea,stroke:#1E8E3E,stroke-width:2px
