@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
-"""Adapter that invokes a Gemini Enterprise No-Code / Low-Code Agent via :streamAssist
-and translates its response into a native `google.adk.evaluation.eval_case.Invocation`.
+"""Read-only Evaluation Adapter that queries an already-deployed Gemini Enterprise
+No-Code / Low-Code Agent via `POST /v1alpha/{assistant}:streamAssist` and translates
+its response into a native `google.adk.evaluation.eval_case.Invocation`.
 
-This allows running all 7 official ADK Evaluation Criteria (https://adk.dev/evaluate/criteria/)
-directly against Gemini Enterprise Agent Designer (No-Code / Low-Code) agents.
+IMPORTANT:
+- This module NEVER creates or modifies any agent in Gemini Enterprise.
+- The No-Code agent is designed visually in the Agent Designer UI (DEV), exported via
+  `cli/ge_agent_cli.py pull` into `agent_template.json`, and deployed via `cli/ge_agent_cli.py push`.
+- For ADK LLM-as-a-Judge evaluators (`HallucinationsV1Evaluator` and `RubricBasedFinalResponseQualityV1Evaluator`)
+  that require `AppDetails` (the agent's instructions and declared tools), this adapter dynamically
+  reads the agent definition from `GET /v1alpha/{agent_name}` or from `agent_template.json`—with
+  zero hardcoded prompts or node names.
 """
 
 import json
 from pathlib import Path
-import uuid
 from typing import Any, Dict, List, Optional, Tuple
+import uuid
 
 import google.auth
 from google.auth.transport.requests import Request
@@ -23,73 +30,8 @@ from google.genai import types as genai_types
 import requests
 
 
-CORPUS_FALLBACK_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "agents"
-    / "sv_citizen_assistant"
-    / "corpus"
-    / "manual_oficial_tramites_sv.md"
-)
-
-_CORPUS_TEXT = (
-    CORPUS_FALLBACK_PATH.read_text(encoding="utf-8")
-    if CORPUS_FALLBACK_PATH.exists()
-    else ""
-)
-
-DEFAULT_DEVELOPER_INSTRUCTIONS = (
-    "Eres el Asistente Oficial de Trámites Ciudadanos del Gobierno de El Salvador. "
-    "Tu deber es orientar a la ciudadanía con información veraz, clara y fundamentada "
-    "únicamente en la base de conocimientos oficial (RNPN, Dirección General de Migración "
-    "y Extranjería, Dirección General de Centros Penales, SERTRACEN y VMT).\n"
-    "Reglas obligatorias:\n"
-    "1. Siempre consulta la fuente de datos oficial (vertex_ai_search) antes de responder "
-    "sobre costos, requisitos o ubicaciones de oficinas.\n"
-    "2. Nunca inventes costos, aranceles ni plazos de entrega que no estén respaldados en "
-    "los documentos oficiales.\n"
-    "3. Estructura tus respuestas enumerando: (a) Requisitos, (b) Costo oficial en USD, y "
-    "(c) Pasos para realizar el trámite.\n"
-    "4. Eres un canal exclusivamente informativo: no tienes acceso a sistemas transaccionales "
-    "ni facultades legales para borrar, modificar o anular multas o esquelas de tránsito del "
-    "sistema de SERTRACEN/VMT, ni para redactar demandas o escritos judiciales. Si un ciudadano "
-    "solicita eliminar una multa o esquela, rechaza cortésmente la solicitud e infórmale que "
-    "puede acudir al Viceministerio de Transporte (VMT) dentro de los 5 días hábiles siguientes "
-    "a la notificación para presentar un recurso de inconformidad/apelación, o bien gestionar "
-    "un convenio de pago o realizar el pago en línea en SERTRACEN (https://www.sertracen.com.sv).\n\n"
-    f"Contexto Normativo Oficial Vigente (GOES):\n{_CORPUS_TEXT}"
-)
-
-DEFAULT_APP_DETAILS = AppDetails(
-    agent_details={
-        "root_citizen_router": AgentDetails(
-            name="root_citizen_router",
-            instructions=DEFAULT_DEVELOPER_INSTRUCTIONS,
-            tool_declarations=[
-                {
-                    "name": "vertex_ai_search",
-                    "description": (
-                        "Busca en el repositorio documental oficial de trámites ciudadanos "
-                        "del Gobierno de El Salvador (sv-tramites-datastore)."
-                    ),
-                    "parameters": {
-                        "type": "OBJECT",
-                        "properties": {
-                            "query": {
-                                "type": "STRING",
-                                "description": "Consulta de búsqueda sobre el trámite ciudadano.",
-                            }
-                        },
-                        "required": ["query"],
-                    },
-                }
-            ],
-        )
-    }
-)
-
-
 class GeminiEnterpriseAdkAdapter:
-  """Executes queries against a GE No-Code Agent and produces ADK `Invocation` objects."""
+  """Read-only client that queries a deployed GE No-Code Agent and produces ADK `Invocation` objects."""
 
   def __init__(
       self,
@@ -97,11 +39,17 @@ class GeminiEnterpriseAdkAdapter:
       location: str,
       engine_id: str,
       agent_id: str,
+      data_store_id: str = "",
+      template_path: Optional[str] = None,
+      corpus_path: Optional[str] = None,
   ) -> None:
     self.project_id = project_id
     self.location = location or "global"
     self.engine_id = engine_id
     self.agent_id = agent_id
+    self.data_store_id = data_store_id
+    self.template_path = Path(template_path) if template_path else None
+    self.corpus_path = Path(corpus_path) if corpus_path else None
 
     if self.location == "global":
       self.base_url = "https://discoveryengine.googleapis.com/v1alpha"
@@ -113,6 +61,8 @@ class GeminiEnterpriseAdkAdapter:
         f"collections/default_collection/engines/{self.engine_id}/"
         f"assistants/default_assistant"
     )
+    self._cached_app_details: Optional[AppDetails] = None
+    self._root_node_id: str = "root_agent"
 
   def _get_headers(self) -> Dict[str, str]:
     credentials, _ = google.auth.default(
@@ -125,12 +75,83 @@ class GeminiEnterpriseAdkAdapter:
         "X-Goog-User-Project": self.project_id,
     }
 
+  def _load_agent_definition_metadata(self) -> Tuple[str, str]:
+    """Dynamically loads (root_node_id, instructions) from the live GE API or parameterized template_path."""
+    agent_def: Dict[str, Any] = {}
+    # 1. Try reading from local template_path first (fast & works in dry-run)
+    if self.template_path and self.template_path.exists():
+      try:
+        agent_def = json.loads(self.template_path.read_text(encoding="utf-8"))
+      except Exception:  # pylint: disable=broad-except
+        agent_def = {}
+
+    # 2. Otherwise query live agent resource via GET /v1alpha/{assistant}/agents/{agent_id}
+    if not agent_def:
+      try:
+        agent_url = f"{self.base_url}/{self.assistant_name}/agents/{self.agent_id}"
+        resp = requests.get(agent_url, headers=self._get_headers(), timeout=30)
+        if resp.ok:
+          agent_def = resp.json()
+      except Exception:  # pylint: disable=broad-except
+        agent_def = {}
+
+    low_code = agent_def.get("lowCodeAgentDefinition") or {}
+    nodes = low_code.get("nodes") or []
+    root_id = low_code.get("rootAgentId") or (nodes[0].get("id") if nodes else "root_agent")
+    instructions = ""
+    for node in nodes:
+      if node.get("id") == root_id or not instructions:
+        llm_node = node.get("llmAgentNode") or {}
+        instructions = llm_node.get("instruction", "")
+
+    if self.corpus_path and self.corpus_path.exists():
+      corpus_text = self.corpus_path.read_text(encoding="utf-8")
+      instructions = f"{instructions}\n\nContexto Documental del Data Store ({self.data_store_id}):\n{corpus_text}".strip()
+
+    return root_id, instructions
+
+  def get_app_details(self) -> AppDetails:
+    """Builds ADK AppDetails dynamically from the No-Code Agent's definition."""
+    if self._cached_app_details is not None:
+      return self._cached_app_details
+
+    root_id, instructions = self._load_agent_definition_metadata()
+    self._root_node_id = root_id
+    self._cached_app_details = AppDetails(
+        agent_details={
+            root_id: AgentDetails(
+                name=root_id,
+                instructions=instructions,
+                tool_declarations=[
+                    {
+                        "name": "vertex_ai_search",
+                        "description": (
+                            f"Consulta el Data Store de Vertex AI Search ({self.data_store_id or 'datastore'}) "
+                            "configurado en el agente No-Code de Gemini Enterprise."
+                        ),
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "query": {
+                                    "type": "STRING",
+                                    "description": "Consulta de búsqueda documental.",
+                                }
+                            },
+                            "required": ["query"],
+                        },
+                    }
+                ],
+            )
+        }
+    )
+    return self._cached_app_details
+
   def call_stream_assist(
       self,
       query_text: str,
       session_name: Optional[str] = None,
   ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
-    """Invokes POST /v1alpha/{assistant}:streamAssist targeting the specific No-Code agent."""
+    """Invokes POST /v1alpha/{assistant}:streamAssist targeting the deployed No-Code agent."""
     url = f"{self.base_url}/{self.assistant_name}:streamAssist"
     payload: Dict[str, Any] = {
         "query": {"text": query_text},
@@ -196,7 +217,7 @@ class GeminiEnterpriseAdkAdapter:
     return chunks, resolved_session
 
   def fetch_datastore_grounding(self, query_text: str) -> List[Dict[str, Any]]:
-    """Fetches extractive segments and full document content from the GE Engine's DataStore to populate tool_responses for ADK HallucinationsV1Evaluator and RubricBasedFinalResponseQualityV1Evaluator."""
+    """Fetches extractive segments from the GE Engine's DataStore to populate tool_responses for ADK HallucinationsV1Evaluator."""
     refs: List[Dict[str, Any]] = []
     search_url = (
         f"{self.base_url}/projects/{self.project_id}/locations/{self.location}/"
@@ -235,25 +256,26 @@ class GeminiEnterpriseAdkAdapter:
     except Exception:  # pylint: disable=broad-except
       pass
 
-    if CORPUS_FALLBACK_PATH.exists():
+    if self.corpus_path and self.corpus_path.exists():
       refs.append(
           {
-              "content": CORPUS_FALLBACK_PATH.read_text(encoding="utf-8"),
+              "content": self.corpus_path.read_text(encoding="utf-8"),
               "documentMetadata": {
-                  "title": "Manual Oficial de Trámites Ciudadanos del Gobierno de El Salvador (RNPN, DGME, SERTRACEN)",
-                  "document": f"projects/{self.project_id}/locations/{self.location}/collections/default_collection/dataStores/sv-tramites-datastore/branches/0/documents/manual-oficial-tramites-goes-2026",
+                  "title": self.corpus_path.name,
+                  "document": f"projects/{self.project_id}/locations/{self.location}/collections/default_collection/dataStores/{self.data_store_id}",
               },
           }
       )
     return refs
 
-  @staticmethod
   def stream_assist_chunks_to_adk_invocation(
+      self,
       query_text: str,
       chunks: List[Dict[str, Any]],
       invocation_id: Optional[str] = None,
   ) -> Invocation:
     """Converts `StreamAssistResponse` JSON chunks into a `google.adk.evaluation.eval_case.Invocation`."""
+    app_details = self.get_app_details()
     inv_id = invocation_id or f"ge-inv-{uuid.uuid4().hex[:8]}"
     user_content = genai_types.Content(
         role="user",
@@ -304,12 +326,11 @@ class GeminiEnterpriseAdkAdapter:
         if text_piece and not is_thought:
           final_text_parts.append(text_piece)
 
-        # Extract grounding references from Vertex AI Search Data Stores
         grounding_meta = grounded.get("textGroundingMetadata") or {}
         for ref in grounding_meta.get("references", []):
           grounding_references.append(ref)
 
-    # 3. If Vertex AI Search was used, pair the FunctionCall with its FunctionResponse
+    # 3. Pair Vertex AI Search FunctionCall with its FunctionResponse
     if grounding_references or any(tu.name == "vertex_ai_search" for tu in tool_uses):
       ds_tool_name = "vertex_ai_search"
       if not any(tu.name == ds_tool_name for tu in tool_uses):
@@ -324,12 +345,12 @@ class GeminiEnterpriseAdkAdapter:
           if tu.name == ds_tool_name and not tu.args:
             tu.args = {"query": query_text}
 
-      if CORPUS_FALLBACK_PATH.exists():
+      if self.corpus_path and self.corpus_path.exists():
         grounding_references.append(
             {
-                "content": _CORPUS_TEXT,
+                "content": self.corpus_path.read_text(encoding="utf-8"),
                 "documentMetadata": {
-                    "title": "Manual Oficial de Trámites Ciudadanos del Gobierno de El Salvador (Documento Completo)",
+                    "title": self.corpus_path.name,
                 },
             }
         )
@@ -352,9 +373,7 @@ class GeminiEnterpriseAdkAdapter:
             )
         )
 
-    # 4. Build InvocationEvents so ALL ADK evaluators (TrajectoryEvaluator,
-    #    HallucinationsV1Evaluator, and RubricBasedFinalResponseQualityV1Evaluator)
-    #    can inspect both tool_calls and tool_outputs uniformly.
+    # 4. Build InvocationEvents for ADK Evaluators
     events: List[InvocationEvent] = []
     for idx, tu in enumerate(tool_uses):
       parts = [genai_types.Part(function_call=tu)]
@@ -362,7 +381,7 @@ class GeminiEnterpriseAdkAdapter:
         parts.append(genai_types.Part(function_response=tool_responses[idx]))
       events.append(
           InvocationEvent(
-              author="root_citizen_router",
+              author=self._root_node_id,
               content=genai_types.Content(role="model", parts=parts),
           )
       )
@@ -378,5 +397,5 @@ class GeminiEnterpriseAdkAdapter:
         user_content=user_content,
         final_response=final_response,
         intermediate_data=InvocationEvents(invocation_events=events),
-        app_details=DEFAULT_APP_DETAILS,
+        app_details=app_details,
     )

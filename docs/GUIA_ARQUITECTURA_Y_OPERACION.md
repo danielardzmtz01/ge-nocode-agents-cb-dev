@@ -11,223 +11,112 @@
 
 Ambos flujos siguen el patrón **In-Place Multi-Repositorio (`Send To Next Environment`)**, donde los 3 repositorios (`dev`, `stg`, `prd`) mantienen **exactamente el mismo código fuente** sin IDs quemados (*hardcoded*). En tiempo de ejecución, el pipeline genera *in-place* el archivo `spec_variables.auto.yaml`, hidrata la plantilla del agente ([`agent_template.json`](file:///usr/local/google/home/danielardzmtz/Desktop/github_repos/ge-nocode-cicd/ge-nocode-agents-dev/agents/sv_citizen_assistant/agent_template.json)), compila el grafo No-Code en Gemini Enterprise (`:deployLowCode`), ejecuta la compuerta de calidad con **`google-adk`** ([`run_eval.py`](file:///usr/local/google/home/danielardzmtz/Desktop/github_repos/ge-nocode-cicd/ge-nocode-agents-dev/eval/run_eval.py)) y promueve el código al siguiente ambiente.
 
-````carousel
 ### Opción A: Arquitectura CI/CD In-Place con GitHub Actions (`goes-ge-gha-{dev,stg,prd}`)
 
 ```mermaid
----
-config:
-  layout: elk
-  look: neo
-  theme: default
-themeVariables:
-  fontFamily: 'Roboto, Google Sans, Helvetica, Arial, sans-serif'
-  primaryColor: '#4285F4'
-  secondaryColor: '#34A853'
-  tertiaryColor: '#FBBC04'
-  mainBkg: '#FFFFFF'
-  nodeBorder: '#4285F4'
-  clusterBkg: '#F8F9FA'
-  clusterBorder: '#DADCE0'
-  lineColor: '#5F6368'
-  edgeLabelBackground: '#ffffff'
----
 flowchart TD
-    subgraph ROW1[" "]
+    subgraph SG_Design["1. Diseño & Exportación (UI a GitOps)"]
         direction LR
-        subgraph SG_Design["1. Diseño & Exportación (UI a GitOps)"]
-            direction LR
-            Designer["`**Diseñador de Agentes**<br>Gobierno de El Salvador`"]:::gcpBlue
-            Designer@{ icon: "fa:user" }
-            GE_UI["`**GE Agent Designer UI**<br>No-Code / Low-Code`"]:::gcpBlue
-            GE_UI@{ icon: "gcp:vertexai" }
-            Pull_CLI["`**ge_agent_cli.py pull**<br>GetAgent + Parametrización`"]
-            Pull_CLI@{ icon: "logos:python" }
-
-            Designer --> GE_UI --> Pull_CLI
-        end
+        Designer["Diseñador de Agentes<br/>(Gobierno de El Salvador)"]:::gcpBlue
+        GE_UI["GE Agent Designer UI<br/>(No-Code / Low-Code)"]:::gcpBlue
+        Pull_CLI["ge_agent_cli.py pull<br/>(GetAgent + Parametrización)"]:::gcpBlue
+        Designer --> GE_UI --> Pull_CLI
     end
 
-    Pull_CLI --> wpA_src((("A"))):::wp_blue
+    Pull_CLI --> Repo_Dev
 
     subgraph SG_Dev["2. Ambiente DEV (Folder GOES: goes-ge-gha-dev | ge-nocode-agents-dev)"]
         direction LR
-        wpA_dst((("A"))):::wp_blue
-        Repo_Dev["`**Repo GitHub DEV**<br>agent_template.json + EvalSet`"]
-        Repo_Dev@{ icon: "logos:github" }
-        CI_Dev["`**GitHub Actions**<br>Hidrata spec_variables.auto.yaml`"]:::gcpBlue
-        CI_Dev@{ icon: "gcp:cloud-build" }
-        GE_Dev["`**Gemini Enterprise DEV**<br>:deployLowCode (Scope: PRIVATE)`"]:::gcpBlue
-        GE_Dev@{ icon: "gcp:vertexai" }
-        ADK_Dev["`**Adapter :streamAssist -> ADK**<br>8 Casos Golden Dataset Gate`"]:::gcpGreen
-        ADK_Dev@{ icon: "gcp:vertexai" }
-
-        wpA_dst ==> Repo_Dev --> CI_Dev --> GE_Dev --> ADK_Dev
+        Repo_Dev["Repo GitHub DEV<br/>(agent_template.json + EvalSet)"]:::gcpBlue
+        TF_Dev["Fase 1: Terraform Services<br/>(Bucket + DataStore + GE Workaround)"]:::gcpBlue
+        GE_Dev["Fase 2: Gemini Enterprise DEV<br/>(:deployLowCode | Scope: PRIVATE)"]:::gcpBlue
+        ADK_Dev["Fase 3: Adapter :streamAssist -> ADK<br/>(8 Casos x 4 Métricas = 32 Evals)"]:::gcpGreen
+        Repo_Dev --> TF_Dev --> GE_Dev --> ADK_Dev
     end
 
-    ADK_Dev -->|"Score >= Threshold (32/32 PASSED)<br>Send To Next Environment"| wpB_src((("B"))):::wp_green
+    ADK_Dev ==>|"Score >= Threshold (32/32 PASSED)<br/>Send To Next Environment"| Repo_Stg
 
     subgraph SG_Stg["3. Ambiente STG + Revisión HITL (Folder GOES: goes-ge-gha-stg | ge-nocode-agents-stg)"]
         direction LR
-        wpB_dst((("B"))):::wp_green
-        Repo_Stg["`**Repo GitHub STG**<br>Promoción In-Place (main)`"]
-        Repo_Stg@{ icon: "logos:github" }
-        CI_Stg["`**GitHub Actions**<br>Hidrata ENV=stg`"]:::gcpYellow
-        CI_Stg@{ icon: "gcp:cloud-build" }
-        GE_Stg["`**Gemini Enterprise STG**<br>:deployLowCode + :requestAgentReview`"]:::gcpYellow
-        GE_Stg@{ icon: "gcp:vertexai" }
-        HITL["`**Validación HITL + ADK Gate**<br>Scope: RESTRICTED (ENABLED)`"]:::gcpYellow
-        HITL@{ icon: "fa:user" }
-
-        wpB_dst ==> Repo_Stg --> CI_Stg --> GE_Stg --> HITL
+        Repo_Stg["Repo GitHub STG<br/>(Promoción In-Place main)"]:::gcpYellow
+        TF_Stg["Fase 1: Terraform Services<br/>(Reconciliación en goes-ge-gha-stg)"]:::gcpYellow
+        GE_Stg["Fase 2: Gemini Enterprise STG<br/>(:deployLowCode + :requestAgentReview)"]:::gcpYellow
+        HITL["Fase 3: Validación HITL + ADK Gate<br/>(Scope: RESTRICTED | ENABLED)"]:::gcpYellow
+        Repo_Stg --> TF_Stg --> GE_Stg --> HITL
     end
 
-    HITL -->|"Aprobación HITL<br>Send To Next Environment"| wpC_src((("C"))):::wp_yellow
+    HITL ==>|"Aprobación HITL<br/>Send To Next Environment"| Repo_Prd
 
     subgraph SG_Prd["4. Ambiente PRD & Gobernanza (Folder GOES: goes-ge-gha-prd | ge-nocode-agents-prd)"]
         direction LR
-        wpC_dst((("C"))):::wp_yellow
-        Repo_Prd["`**Repo GitHub PRD**<br>Guard: !contains(prd)`"]
-        Repo_Prd@{ icon: "logos:github" }
-        CI_Prd["`**GitHub Actions**<br>Hidrata ENV=prd`"]:::gcpGreen
-        CI_Prd@{ icon: "gcp:cloud-build" }
-        GE_Prd["`**Gemini Enterprise PRD**<br>:deployLowCode + Smoke Test ADK`"]:::gcpGreen
-        GE_Prd@{ icon: "gcp:vertexai" }
-        Pub_Prd["`**Release Inmutable Ciudadano**<br>:publish + activeRevision`"]:::gcpRed
-        Pub_Prd@{ icon: "gcp:vertexai" }
-
-        wpC_dst ==> Repo_Prd --> CI_Prd --> GE_Prd --> Pub_Prd
+        Repo_Prd["Repo GitHub PRD<br/>(Guard: !contains(prd))"]:::gcpGreen
+        TF_Prd["Fase 1: Terraform Services<br/>(Reconciliación en goes-ge-gha-prd)"]:::gcpGreen
+        GE_Prd["Fase 2: Gemini Enterprise PRD<br/>(:deployLowCode + Smoke Test ADK)"]:::gcpGreen
+        Pub_Prd["Fase 3: Release Inmutable<br/>(:publish + activeRevision ALL_USERS)"]:::gcpRed
+        Repo_Prd --> TF_Prd --> GE_Prd --> Pub_Prd
     end
 
-    ROW1 ~~~ SG_Dev ~~~ SG_Stg ~~~ SG_Prd
-
-    classDef gcpBlue fill:#E8F0FE,stroke:#1967D2,stroke-width:2px,color:#000,font-family:Roboto;
-    classDef gcpGreen fill:#E6F4EA,stroke:#1E8E3E,stroke-width:2px,color:#000,font-family:Roboto;
-    classDef gcpYellow fill:#FEF7E0,stroke:#B06000,stroke-width:2px,color:#000,font-family:Roboto;
-    classDef gcpRed fill:#FCE8E6,stroke:#D93025,stroke-width:2px,color:#000,font-family:Roboto;
-    classDef wp_blue fill:#1A73E8,stroke:#0D47A1,stroke-width:2px,color:#fff,font-weight:bold;
-    classDef wp_green fill:#34A853,stroke:#1B5E20,stroke-width:2px,color:#fff,font-weight:bold;
-    classDef wp_yellow fill:#FBBC04,stroke:#F29900,stroke-width:2px,color:#000,font-weight:bold;
-
-    style ROW1 fill:none,stroke:none
-    style SG_Design fill:#ffffff,stroke:#9E9E9E,stroke-dasharray:5 5,stroke-width:2px
-    style SG_Dev fill:#e8f0fe,stroke:#1967D2,stroke-width:2px
-    style SG_Stg fill:#f9f9f9,stroke:#DADCE0,stroke-width:2px
-    style SG_Prd fill:#e6f4ea,stroke:#1E8E3E,stroke-width:2px
+    classDef gcpBlue fill:#E8F0FE,stroke:#1967D2,stroke-width:2px,color:#000;
+    classDef gcpGreen fill:#E6F4EA,stroke:#1E8E3E,stroke-width:2px,color:#000;
+    classDef gcpYellow fill:#FEF7E0,stroke:#B06000,stroke-width:2px,color:#000;
+    classDef gcpRed fill:#FCE8E6,stroke:#D93025,stroke-width:2px,color:#000;
 ```
-<!-- slide -->
+
 ### Opción B: Arquitectura CI/CD In-Place con Google Cloud Build (`goes-ge-cb-{dev,stg,prd}`)
 
 ```mermaid
----
-config:
-  layout: elk
-  look: neo
-  theme: default
-themeVariables:
-  fontFamily: 'Roboto, Google Sans, Helvetica, Arial, sans-serif'
-  primaryColor: '#4285F4'
-  secondaryColor: '#34A853'
-  tertiaryColor: '#FBBC04'
-  mainBkg: '#FFFFFF'
-  nodeBorder: '#4285F4'
-  clusterBkg: '#F8F9FA'
-  clusterBorder: '#DADCE0'
-  lineColor: '#5F6368'
-  edgeLabelBackground: '#ffffff'
----
 flowchart TD
-    subgraph ROW1[" "]
+    subgraph SG_Design["1. Diseño & Exportación (UI a GitOps)"]
         direction LR
-        subgraph SG_Design["1. Diseño & Exportación (UI a GitOps)"]
-            direction LR
-            Designer["`**Diseñador de Agentes**<br>Gobierno de El Salvador`"]:::gcpBlue
-            Designer@{ icon: "fa:user" }
-            GE_UI["`**GE Agent Designer UI**<br>No-Code / Low-Code`"]:::gcpBlue
-            GE_UI@{ icon: "gcp:vertexai" }
-            Pull_CLI["`**ge_agent_cli.py pull**<br>GetAgent + Parametrización`"]
-            Pull_CLI@{ icon: "logos:python" }
-
-            Designer --> GE_UI --> Pull_CLI
-        end
+        Designer["Diseñador de Agentes<br/>(Gobierno de El Salvador)"]:::gcpBlue
+        GE_UI["GE Agent Designer UI<br/>(No-Code / Low-Code)"]:::gcpBlue
+        Pull_CLI["ge_agent_cli.py pull<br/>(GetAgent + Parametrización)"]:::gcpBlue
+        Designer --> GE_UI --> Pull_CLI
     end
 
-    Pull_CLI --> wpA_src((("A"))):::wp_blue
+    Pull_CLI --> Repo_Dev
 
     subgraph SG_Dev["2. Proyecto GCP DEV (Folder GOES: goes-ge-cb-dev | ge-nocode-agents-cb-dev)"]
         direction LR
-        wpA_dst((("A"))):::wp_blue
-        Repo_Dev["`**Repo GitHub DEV**<br>ge-nocode-agents-cb-dev`"]
-        Repo_Dev@{ icon: "logos:github" }
-        CB_Deploy_Dev["`**Cloud Build Deploy & Eval**<br>cloudbuild_deploy_and_eval.yaml (_ENV=dev)`"]:::gcpBlue
-        CB_Deploy_Dev@{ icon: "gcp:cloud-build" }
-        GE_Dev["`**Gemini Enterprise DEV**<br>:deployLowCode + :streamAssist ADK Gate`"]:::gcpGreen
-        GE_Dev@{ icon: "gcp:vertexai" }
-        SM_Dev["`**Secret Manager**<br>github-token-user + ge-adc-credentials`"]:::gcpBlue
-        SM_Dev@{ icon: "gcp:secret-manager" }
-        CB_Promo_Dev["`**Cloud Build Promote**<br>cloudbuild_deployment_actions.yaml`"]:::gcpBlue
-        CB_Promo_Dev@{ icon: "gcp:cloud-build" }
-
-        wpA_dst ==> Repo_Dev --> CB_Deploy_Dev --> GE_Dev --> CB_Promo_Dev
+        Repo_Dev["Repo GitHub DEV<br/>(ge-nocode-agents-cb-dev)"]:::gcpBlue
+        CB_Deploy_Dev["Cloud Build: Terraform + Deploy<br/>(cloudbuild_deploy_and_eval.yaml)"]:::gcpBlue
+        GE_Dev["Gemini Enterprise DEV<br/>(:deployLowCode + :streamAssist ADK Gate)"]:::gcpGreen
+        SM_Dev["Secret Manager<br/>(github-token-user + ge-adc-credentials)"]:::gcpBlue
+        CB_Promo_Dev["Cloud Build Promote<br/>(cloudbuild_deployment_actions.yaml)"]:::gcpBlue
+        Repo_Dev --> CB_Deploy_Dev --> GE_Dev --> CB_Promo_Dev
         SM_Dev -.->|"Inyecta secretEnv"| CB_Promo_Dev
     end
 
-    CB_Promo_Dev -->|"git push target-repo main --force<br>(Promoción DEV -> STG)"| wpB_src((("B"))):::wp_green
+    CB_Promo_Dev ==>|"git push target-repo main --force<br/>(Promoción DEV -> STG)"| Repo_Stg
 
     subgraph SG_Stg["3. Proyecto GCP STG + Aprobación HITL (Folder GOES: goes-ge-cb-stg | ge-nocode-agents-cb-stg)"]
         direction LR
-        wpB_dst((("B"))):::wp_green
-        Repo_Stg["`**Repo GitHub STG**<br>ge-nocode-agents-cb-stg`"]
-        Repo_Stg@{ icon: "logos:github" }
-        CB_Deploy_Stg["`**Cloud Build Deploy & Eval**<br>cloudbuild_deploy_and_eval.yaml (_ENV=stg)`"]:::gcpYellow
-        CB_Deploy_Stg@{ icon: "gcp:cloud-build" }
-        GE_Stg["`**Gemini Enterprise STG**<br>:deployLowCode + ADK + :requestAgentReview`"]:::gcpYellow
-        GE_Stg@{ icon: "gcp:vertexai" }
-        HITL_Stg["`**Aprobación HITL**<br>Cloud Build Approval Gate + Scope RESTRICTED`"]:::gcpYellow
-        HITL_Stg@{ icon: "fa:user" }
-        CB_Promo_Stg["`**Cloud Build Promote**<br>cloudbuild_deployment_actions.yaml`"]:::gcpYellow
-        CB_Promo_Stg@{ icon: "gcp:cloud-build" }
-
-        wpB_dst ==> Repo_Stg --> CB_Deploy_Stg --> GE_Stg --> HITL_Stg --> CB_Promo_Stg
+        Repo_Stg["Repo GitHub STG<br/>(ge-nocode-agents-cb-stg)"]:::gcpYellow
+        CB_Deploy_Stg["Cloud Build: Terraform + Deploy<br/>(cloudbuild_deploy_and_eval.yaml)"]:::gcpYellow
+        GE_Stg["Gemini Enterprise STG<br/>(:deployLowCode + ADK + :requestAgentReview)"]:::gcpYellow
+        HITL_Stg["Aprobación HITL<br/>(Cloud Build Approval Gate + RESTRICTED)"]:::gcpYellow
+        CB_Promo_Stg["Cloud Build Promote<br/>(cloudbuild_deployment_actions.yaml)"]:::gcpYellow
+        Repo_Stg --> CB_Deploy_Stg --> GE_Stg --> HITL_Stg --> CB_Promo_Stg
     end
 
-    CB_Promo_Stg -->|"git push target-repo main --force<br>(Promoción STG -> PRD)"| wpC_src((("C"))):::wp_yellow
+    CB_Promo_Stg ==>|"git push target-repo main --force<br/>(Promoción STG -> PRD)"| Repo_Prd
 
     subgraph SG_Prd["4. Proyecto GCP PRD & Gobernanza (Folder GOES: goes-ge-cb-prd | ge-nocode-agents-cb-prd)"]
         direction LR
-        wpC_dst((("C"))):::wp_yellow
-        Repo_Prd["`**Repo GitHub PRD**<br>ge-nocode-agents-cb-prd`"]
-        Repo_Prd@{ icon: "logos:github" }
-        CB_Deploy_Prd["`**Cloud Build Deploy & Eval**<br>cloudbuild_deploy_and_eval.yaml (_ENV=prd)`"]:::gcpGreen
-        CB_Deploy_Prd@{ icon: "gcp:cloud-build" }
-        GE_Prd["`**Gemini Enterprise PRD**<br>:deployLowCode + Smoke Test ADK`"]:::gcpGreen
-        GE_Prd@{ icon: "gcp:vertexai" }
-        Pub_Prd["`**Release Inmutable Ciudadano**<br>:publish + activeRevision`"]:::gcpRed
-        Pub_Prd@{ icon: "gcp:vertexai" }
-        Logs_Prd["`**Cloud Logging**<br>CLOUD_LOGGING_ONLY + Auditoría ADK`"]:::gcpBlue
-        Logs_Prd@{ icon: "gcp:cloud-logging" }
-
-        wpC_dst ==> Repo_Prd --> CB_Deploy_Prd --> GE_Prd --> Pub_Prd
+        Repo_Prd["Repo GitHub PRD<br/>(ge-nocode-agents-cb-prd)"]:::gcpGreen
+        CB_Deploy_Prd["Cloud Build: Terraform + Deploy<br/>(cloudbuild_deploy_and_eval.yaml)"]:::gcpGreen
+        GE_Prd["Gemini Enterprise PRD<br/>(:deployLowCode + Smoke Test ADK)"]:::gcpGreen
+        Pub_Prd["Release Inmutable Ciudadano<br/>(:publish + activeRevision ALL_USERS)"]:::gcpRed
+        Logs_Prd["Cloud Logging<br/>(CLOUD_LOGGING_ONLY + Auditoría ADK)"]:::gcpBlue
+        Repo_Prd --> CB_Deploy_Prd --> GE_Prd --> Pub_Prd
         CB_Deploy_Prd -.->|"Trazabilidad"| Logs_Prd
     end
 
-    ROW1 ~~~ SG_Dev ~~~ SG_Stg ~~~ SG_Prd
-
-    classDef gcpBlue fill:#E8F0FE,stroke:#1967D2,stroke-width:2px,color:#000,font-family:Roboto;
-    classDef gcpGreen fill:#E6F4EA,stroke:#1E8E3E,stroke-width:2px,color:#000,font-family:Roboto;
-    classDef gcpYellow fill:#FEF7E0,stroke:#B06000,stroke-width:2px,color:#000,font-family:Roboto;
-    classDef gcpRed fill:#FCE8E6,stroke:#D93025,stroke-width:2px,color:#000,font-family:Roboto;
-    classDef wp_blue fill:#1A73E8,stroke:#0D47A1,stroke-width:2px,color:#fff,font-weight:bold;
-    classDef wp_green fill:#34A853,stroke:#1B5E20,stroke-width:2px,color:#fff,font-weight:bold;
-    classDef wp_yellow fill:#FBBC04,stroke:#F29900,stroke-width:2px,color:#000,font-weight:bold;
-
-    style ROW1 fill:none,stroke:none
-    style SG_Design fill:#ffffff,stroke:#9E9E9E,stroke-dasharray:5 5,stroke-width:2px
-    style SG_Dev fill:#e8f0fe,stroke:#1967D2,stroke-width:2px
-    style SG_Stg fill:#f9f9f9,stroke:#DADCE0,stroke-width:2px
-    style SG_Prd fill:#e6f4ea,stroke:#1E8E3E,stroke-width:2px
+    classDef gcpBlue fill:#E8F0FE,stroke:#1967D2,stroke-width:2px,color:#000;
+    classDef gcpGreen fill:#E6F4EA,stroke:#1E8E3E,stroke-width:2px,color:#000;
+    classDef gcpYellow fill:#FEF7E0,stroke:#B06000,stroke-width:2px,color:#000;
+    classDef gcpRed fill:#FCE8E6,stroke:#D93025,stroke-width:2px,color:#000;
 ```
-````
 
 ---
 
@@ -378,14 +267,83 @@ python3 cli/ge_agent_cli.py rollback \
 
 - **En GitHub Actions (`secrets.*`)**:
   - `TOKEN_USER`: Token de GitHub con permisos `repo` y `workflow` para ejecutar `Send To Next Environment`.
-  - `GOOGLE_CREDENTIALS` (o Workload Identity Federation vía `vars.WIF_PROVIDER` + `vars.WIF_SERVICE_ACCOUNT`): Credencial con acceso a Discovery Engine y Vertex AI.
+  - `GOOGLE_CREDENTIALS` (o Workload Identity Federation vía `vars.WIF_PROVIDER` + `vars.WIF_SERVICE_ACCOUNT`): Credencial con acceso a Discovery Engine, Cloud Storage y Vertex AI.
 - **En Google Cloud Build (Secret Manager + IAM)**:
   - Secretos en Secret Manager por proyecto (`goes-ge-cb-{dev,stg,prd}`):
     - `github-token-user`: Token de GitHub para que `cloudbuild_deployment_actions.yaml` haga `git push` al repositorio del siguiente ambiente.
-    - `ge-adc-credentials`: Credencial con acceso a Discovery Engine (`v1alpha`) y Vertex AI (`aiplatform.googleapis.com`).
-  - Roles IAM asignados a las cuentas de servicio de Cloud Build (`{PROJECT_NUMBER}@cloudbuild.gserviceaccount.com` y `{PROJECT_NUMBER}-compute@developer.gserviceaccount.com`):
+    - `ge-adc-credentials`: Credencial con acceso a Discovery Engine (`v1alpha`), Cloud Storage y Vertex AI (`aiplatform.googleapis.com`).
+  - Roles IAM asignados a las cuentas de servicio de CI/CD (`ge-cicd-runner`, `{PROJECT_NUMBER}@cloudbuild.gserviceaccount.com` y `{PROJECT_NUMBER}-compute@developer.gserviceaccount.com`):
     - `roles/discoveryengine.admin`
     - `roles/aiplatform.user`
     - `roles/secretmanager.secretAccessor`
     - `roles/storage.admin`
+    - `roles/serviceusage.serviceUsageAdmin`
     - `roles/logging.logWriter`
+
+---
+
+## 6. Integración con IaC Corporativo (Terraform + Workaround `v1alpha`)
+
+Siguiendo el estándar corporativo de repositorios de infraestructura (`terraform_projects/` + `terraform_services/`), cada repositorio de ambiente (`dev`, `stg`, `prd`) incluye el código declarativo de Terraform y lo conecta directamente con el despliegue del agente No-Code:
+
+| División | Directorio / Componente | Qué es Nativo en Terraform vs. Workaround `v1alpha` | Cómo se conecta con el Agente No-Code |
+| :--- | :--- | :--- | :--- |
+| **1. Landing Zone Corporativa** | `terraform_projects/` (`folders.tf`, `projects.tf`, `variables.tf`) | **100% Nativo en Terraform**: `google_folder` (`GOES`), `google_project` (los 6 proyectos), `google_project_service` (APIs), `google_service_account` (`ge-cicd-runner`), `google_project_iam_member` y `google_secret_manager_secret`. | Prepara el entorno seguro por ambiente (`dev`, `stg`, `prd`) donde correrán los pipelines. |
+| **2. Repositorios y Variables** | 6 Repositorios en GitHub (`ge-nocode-agents-{dev,stg,prd}` y `ge-nocode-agents-cb-{dev,stg,prd}`) | **Configuración GitOps por Ambiente**: Variables (`ENV`, `GE_PROJECT_ID`, `GE_ENGINE_ID`, `GE_DATA_STORE_ID`, `GE_SHARING_SCOPE`, `TARGET_ENV`, `TARGET_REPO_FN`) y Secretos (`GOOGLE_CREDENTIALS`, `TOKEN_USER`). | Inyecta en tiempo de ejecución las variables en `spec_variables.auto.tfvars` (para Terraform) y `spec_variables.auto.yaml` (para el CLI del Agente). |
+| **3. Servicios Gemini Enterprise** | `terraform_services/` (`main.tf`, `outputs.tf`) + `cli/ensure_ge_infra.py` | **Híbrido (Nativo + Workaround Declarativo)**:<br>• **Nativo**: `google_storage_bucket` (bucket del corpus), `google_storage_bucket_object` (`manual_oficial_tramites_sv.md`) y `google_discovery_engine_data_store` (`sv-tramites-datastore`).<br>• **Workaround (`terraform_data.gemini_enterprise_engine_and_corpus`)**: Ejecuta `local-exec` (`python3 cli/ensure_ge_infra.py`) con trigger `filemd5(corpus)` para reconciliar idempotentemente en la API `v1alpha`: `LicenseConfig`, `UserStore`, el documento RAG indexado, el `Engine` (`APP_TYPE_INTRANET` + `SEARCH_ADD_ON_LLM`) y el `default_assistant`. | Al finalizar `terraform apply`, el pipeline lee `terraform output -raw ge_data_store_id` y `terraform output -raw ge_engine_id` y escribe `spec_variables.auto.yaml`, alimentando automáticamente el despliegue del Agente No-Code. |
+| **4. Ciclo de Vida del Agente No-Code y Evaluación ADK** | `cli/ge_agent_cli.py` + `eval/run_eval.py` | **CLI Declarativo REST `v1alpha` + `google-adk`**: Hidrata `agent_template.json` con los outputs de Terraform, compila el grafo No-Code (`:deployLowCode`), evalúa las 32 métricas con `google-adk` y gobierna el estado (`:requestAgentReview` en STG / `:publish` en PRD). | Garantiza que ningún cambio en la infraestructura RAG ni en el prompt No-Code llegue a producción sin superar el Quality Gate. |
+
+---
+
+## 7. Detalle Paso a Paso del Ciclo de Vida del Agente No-Code (`cli/ge_agent_cli.py`)
+
+El script `cli/ge_agent_cli.py` encapsula las 6 operaciones del ciclo de vida de un agente No-Code / Low-Code sobre la API `v1alpha` de Discovery Engine (`https://discoveryengine.googleapis.com/v1alpha`):
+
+1. **`pull` — Exportación desde Agent Designer UI y Parametrización (`DEV` -> Git)**:
+   - Cuando un diseñador o analista modifica las instrucciones, los *starter prompts* o las herramientas en la consola visual de **Agent Designer (`DEV`)**, ejecuta `python3 cli/ge_agent_cli.py pull`.
+   - El CLI invoca `GET /v1alpha/projects/{project}/locations/global/collections/default_collection/engines/{engine}/assistants/default_assistant/agents/{agent_id}`.
+   - Limpia los metadatos efímeros de solo lectura (`createTime`, `updateTime`, `state`, `activeRevision`) y **reemplaza automáticamente todos los IDs de `DEV`** (ID del proyecto, número de proyecto, Engine ID, Data Store ID y sufijo `(DEV)`) por los placeholders `${GE_PROJECT_ID}`, `${GE_ENGINE_ID}`, `${GE_DATA_STORE_ID}` y `${ENV_UPPER}`, guardando el archivo `agents/sv_citizen_assistant/agent_template.json` listo para hacer `git commit`.
+2. **`push` — Hidratación In-Place y Compilación `:deployLowCode` (Git -> `DEV` / `STG` / `PRD`)**:
+   - Lee `spec_variables.auto.yaml` (generado a partir de los outputs de Terraform del ambiente actual) y sustituye los placeholders en `agent_template.json`.
+   - Resuelve dinámicamente el `project_number` numérico del proyecto destino (requerido internamente por el parser de Vertex AI Search en `lowCodeAgentDefinition.nodes[].llmAgentNode.selectedTools.dataStoreSpecs`).
+   - Busca por `displayName` si el agente ya existe en el `default_assistant` del ambiente: si no existe ejecuta `POST .../agents` (creación); si ya existe ejecuta `PATCH .../agents/{id}?updateMask=displayName,description,lowCodeAgentDefinition` (actualización idempotente).
+   - Finalmente invoca **`POST /v1alpha/{agent_name}:deployLowCode`** con `{"name": agent_name, "deployMode": "DEPLOY"}`, que compila los nodos `lowCodeAgentDefinition` y activa el agente en el motor conversacional.
+3. **`request-review` — Solicitud de Revisión Humana HITL (`STG`)**:
+   - Tras aprobar las 32 métricas de `google-adk` en `STG`, el pipeline invoca `python3 cli/ge_agent_cli.py request-review`.
+   - Ejecuta **`POST /v1alpha/{agent_name}:requestAgentReview`** (transicionando el agente fuera de `PRIVATE`) y aplica `PATCH ?updateMask=sharingConfig` con `{"sharingConfig": {"scope": "RESTRICTED"}}`, habilitando el agente únicamente para el equipo revisor de QA/Gobernanza antes de autorizar el pase a `PRD`.
+4. **`publish` — Revisión Inmutable y Publicación General (`PRD`)**:
+   - Tras aprobar el Smoke Test de `google-adk` en `PRD`, el pipeline invoca `python3 cli/ge_agent_cli.py publish`.
+   - Asegura que el agente esté en estado `ENABLED`, actualiza su alcance a `sharingConfig.scope = "ALL_USERS"`, e invoca **`POST /v1alpha/{agent_name}:publish`** con la etiqueta del commit (`label: "Automated PRD release from commit ..."`).
+   - Esto genera un snapshot inmutable (`AgentRevision`) y actualiza el puntero `activeRevision` del agente productivo.
+5. **`rollback` — Reversión Instantánea en Producción (`PRD`)**:
+   - Ejecuta **`POST /v1alpha/{agent_name}:rollback`** apuntando a un `revisionId` previo para revertir el agente en segundos sin necesidad de recompilar.
+6. **`delete` — Limpieza del Agente Custom para Reinicio de Demos (`STG` / `PRD`)**:
+   - Ejecuta `POST :disableAgent` seguido de **`DELETE /v1alpha/{agent_name}`** para dejar los ambientes de `STG` y `PRD` limpios antes de una demostración manual en vivo.
+
+---
+
+## 8. Guía Paso a Paso para Prueba Manual en Vivo (`DEV` -> `STG` -> `PRD`)
+
+Para realizar la demostración práctica de principio a fin (con **`DEV` ya desplegado** y **`STG` / `PRD` limpios**):
+
+1. **Paso 0 (Si tu sesión local de `gcloud` expiró tras 16 horas)**:
+   - Ejecuta en tu terminal:
+     ```bash
+     gcloud auth application-default login
+     python3 cli/refresh_credentials_and_reset_demo.py
+     ```
+   - Este script actualiza automáticamente el secreto `GOOGLE_CREDENTIALS` en los 6 repositorios de GitHub y en Secret Manager (`goes-ge-cb-*`), elimina el agente custom de `STG` y `PRD` (dejando únicamente `DEV` activo) y limpia el historial de ejecuciones de `STG` y `PRD`.
+2. **Paso 1 — Verificar o Editar el Agente en `DEV` (`goes-ge-gha-dev`)**:
+   - Entra a la consola de **Gemini Enterprise -> Agent Designer** en el proyecto `goes-ge-gha-dev` (`sv-citizen-engine`).
+   - Verás el agente **`Asistente de Trámites Ciudadanos - Gobierno de El Salvador (DEV)`** (`ID: 2172421677339450929`).
+   - En los proyectos `goes-ge-gha-stg` y `goes-ge-gha-prd` comprobarás que el agente custom **no existe** todavía.
+3. **Paso 2 — Promover manualmente de `DEV` a `STG`**:
+   - Ve al repositorio **`danielardzmtz01/ge-nocode-agents-dev`** -> pestaña **Actions** -> selecciona **`Send To Next Environment`** -> haz clic en **`Run workflow`** (branch `main`).
+   - Abre la pestaña **Actions** del repositorio **`danielardzmtz01/ge-nocode-agents-stg`**: verás iniciarse automáticamente el workflow **`GE No-Code Agent Deploy & ADK Eval Actions`**, ejecutando:
+     - **Fase 1 (IaC)**: `terraform init`, `terraform plan`, `terraform apply` en `goes-ge-gha-stg` (reconciliando bucket GCS, Data Store `sv-tramites-datastore` y el workaround `ensure_ge_infra.py`).
+     - **Fase 2 (No-Code CD)**: `ge_agent_cli.py push` creando y compilando (`:deployLowCode`) el agente en `goes-ge-gha-stg`.
+     - **Fase 3 (ADK Gate + HITL)**: `eval/run_eval.py` validando las 32 métricas (`PASSED`) y ejecutando `:requestAgentReview` (`RESTRICTED`).
+4. **Paso 3 — Promover manualmente de `STG` a `PRD`**:
+   - Tras verificar el agente en `STG`, ve al repositorio **`danielardzmtz01/ge-nocode-agents-stg`** -> pestaña **Actions** -> selecciona **`Send To Next Environment`** -> haz clic en **`Run workflow`**.
+   - Abre la pestaña **Actions** del repositorio **`danielardzmtz01/ge-nocode-agents-prd`**: verás ejecutarse **`GE No-Code Agent Deploy & ADK Eval Actions`**, que correrá Terraform en `goes-ge-gha-prd`, desplegará el agente No-Code, validará las 32 métricas con `google-adk` y ejecutará **`:publish`** creando la `AgentRevision` inmutable con alcance `ALL_USERS`.
+

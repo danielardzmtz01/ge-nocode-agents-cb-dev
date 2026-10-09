@@ -1,0 +1,61 @@
+# Github Actions to execute Terraform Landing Zone (GOES Folder, Projects, APIs, IAM & Secret Manager)
+
+name: Terraform Projects Actions
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  terraform-projects:
+    name: "Terraform Projects (${{ vars.ENV }})"
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: ./terraform_projects
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Configure GCP Application Default Credentials
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          echo "${GOOGLE_CREDENTIALS}" > "${RUNNER_TEMP}/gcp_adc.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=${RUNNER_TEMP}/gcp_adc.json" >> "${GITHUB_ENV}"
+
+      - name: Setup backend (Centralized GCS State Bucket in drm-tfproject-000)
+        run: |-
+          cat > backend.tf <<EOF
+          terraform {
+            backend "gcs" {
+              bucket = "${{ vars.BACKEND_BUCKET }}"
+              prefix = "${{ vars.ENV }}/projects/terraform/state"
+            }
+          }
+          EOF
+
+      - name: Setup environment variables (spec_variables.auto.tfvars)
+        run: |-
+          cat > spec_variables.auto.tfvars <<EOF
+          org_id            = "${{ secrets.ORG_ID || '298580255441' }}"
+          billing_account   = "${{ secrets.BILL_ACT }}"
+          terraform_project = "${{ vars.TF_PROJECT || 'drm-tfproject-000' }}"
+          env               = "${{ vars.ENV }}"
+          EOF
+
+      - name: Terraform Init & Plan
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          terraform init
+          terraform plan

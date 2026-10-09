@@ -1,4 +1,4 @@
-# Google Cloud Build pipeline to deploy and evaluate Gemini Enterprise No-Code Agents in-place (dev / stg / prd)
+# Google Cloud Build pipeline to provision/reconcile IaC (Terraform), deploy Gemini Enterprise No-Code Agents, and run ADK Eval (dev / stg / prd)
 #
 # Trigger Substitutions per environment repository:
 #   _ENV: "dev" | "stg" | "prd"
@@ -8,30 +8,13 @@
 #   _GE_DATA_STORE_ID: Vertex AI Search Data Store ID for the environment
 #   _GE_AGENT_ID: Agent ID (optional if creating or matching by displayName)
 #   _GE_SHARING_SCOPE: "PRIVATE" (dev) | "RESTRICTED" (stg) | "ALL_USERS" (prd)
+#   _TF_PROJECT: Centralized Terraform state project (default: "drm-tfproject-000")
+#   _BACKEND_BUCKET: Centralized Terraform GCS state bucket (default: "goes-ge-tf-backend")
 
 steps:
-  # Step 1: Generate in-place environment configuration (spec_variables.auto.yaml)
+  # Step 1: Phase 1 (Terraform IaC), Phase 2 (No-Code Deploy), and Phase 3 (google-adk Evaluation Gate)
   - name: "python:3.11-slim"
-    id: "setup-spec-variables"
-    entrypoint: "bash"
-    args:
-      - "-c"
-      - |
-        cat > spec_variables.auto.yaml <<EOF
-        env: "${_ENV}"
-        ge_project_id: "${_GE_PROJECT_ID}"
-        ge_location: "${_GE_LOCATION}"
-        ge_engine_id: "${_GE_ENGINE_ID}"
-        ge_data_store_id: "${_GE_DATA_STORE_ID}"
-        ge_agent_id: "${_GE_AGENT_ID}"
-        ge_sharing_scope: "${_GE_SHARING_SCOPE}"
-        EOF
-        echo "Generated spec_variables.auto.yaml for environment ${_ENV}:"
-        cat spec_variables.auto.yaml
-
-  # Step 2: Hydrate template, Push & Deploy No-Code Agent, and Run ADK Evaluation Gate
-  - name: "python:3.11-slim"
-    id: "deploy-and-evaluate-adk"
+    id: "iac-deploy-and-evaluate-adk"
     secretEnv: ["GOOGLE_CREDENTIALS_JSON"]
     entrypoint: "bash"
     args:
@@ -44,29 +27,115 @@ steps:
         fi
         pip install --quiet -r requirements.txt
 
-        echo "=== 1. Deploying No-Code Agent to Gemini Enterprise (${_ENV}) ==="
+        echo "=== Installing Terraform CLI 1.9.8 ==="
+        python3 - <<'EOF'
+        import os, stat, urllib.request, zipfile
+        url = "https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip"
+        urllib.request.urlretrieve(url, "/tmp/terraform.zip")
+        with zipfile.ZipFile("/tmp/terraform.zip", "r") as zf:
+            zf.extract("terraform", "/usr/local/bin")
+        os.chmod("/usr/local/bin/terraform", os.stat("/usr/local/bin/terraform").st_mode | stat.S_IEXEC)
+        EOF
+        terraform -version
+
+        echo "=== Phase 1 (IaC): Ensuring Centralized GCS State Bucket in ${_TF_PROJECT} & Running Terraform (${_ENV}) ==="
+        python3 - <<'EOF'
+        import google.auth
+        from google.auth.transport.requests import Request
+        import requests
+
+        tf_project = "${_TF_PROJECT}"
+        bucket_name = "${_BACKEND_BUCKET}"
+        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        creds.refresh(Request())
+        headers = {"Authorization": f"Bearer {creds.token}", "Content-Type": "application/json"}
+        r = requests.get(f"https://storage.googleapis.com/storage/v1/b/{bucket_name}", headers=headers, timeout=30)
+        if r.status_code == 404:
+            r_create = requests.post(
+                f"https://storage.googleapis.com/storage/v1/b?project={tf_project}",
+                headers=headers,
+                json={"name": bucket_name, "location": "US", "iamConfiguration": {"uniformBucketLevelAccess": {"enabled": True}}},
+                timeout=30,
+            )
+            print(f"[Terraform Backend] Created centralized GCS state bucket gs://{bucket_name} in {tf_project}: {r_create.status_code}")
+        else:
+            print(f"[Terraform Backend] Centralized GCS state bucket gs://{bucket_name} ({tf_project}) already exists.")
+        EOF
+
+        cd terraform_services
+        cat > backend.tf <<EOF
+        terraform {
+          backend "gcs" {
+            bucket = "${_BACKEND_BUCKET}"
+            prefix = "${_ENV}-cb/services/terraform/state"
+          }
+        }
+        EOF
+
+        cat > spec_variables.auto.tfvars <<EOF
+        env              = "${_ENV}"
+        ge_project_id    = "${_GE_PROJECT_ID}"
+        ge_location      = "${_GE_LOCATION}"
+        ge_engine_id     = "${_GE_ENGINE_ID}"
+        ge_data_store_id = "${_GE_DATA_STORE_ID}"
+        EOF
+
+        terraform init
+        if ! terraform state show google_discovery_engine_data_store.tramites_ds >/dev/null 2>&1; then
+          terraform import google_discovery_engine_data_store.tramites_ds \
+            "projects/${_GE_PROJECT_ID}/locations/${_GE_LOCATION}/collections/default_collection/dataStores/${_GE_DATA_STORE_ID}" || true
+        fi
+        if ! terraform state show google_storage_bucket.corpus_bucket >/dev/null 2>&1; then
+          terraform import google_storage_bucket.corpus_bucket \
+            "${_GE_PROJECT_ID}-ge-corpus-${_ENV}" || true
+        fi
+
+        terraform plan
+        terraform apply -auto-approve
+
+        TF_PROJECT_ID="$$(terraform output -raw ge_project_id)"
+        TF_LOCATION="$$(terraform output -raw ge_location)"
+        TF_ENGINE_ID="$$(terraform output -raw ge_engine_id)"
+        TF_DATA_STORE_ID="$$(terraform output -raw ge_data_store_id)"
+        cd ..
+
+        cat > spec_variables.auto.yaml <<EOF
+        env: "${_ENV}"
+        ge_project_id: "$${TF_PROJECT_ID}"
+        ge_location: "$${TF_LOCATION}"
+        ge_engine_id: "$${TF_ENGINE_ID}"
+        ge_data_store_id: "$${TF_DATA_STORE_ID}"
+        ge_agent_id: "${_GE_AGENT_ID}"
+        ge_sharing_scope: "${_GE_SHARING_SCOPE}"
+        EOF
+        echo "=== Generated spec_variables.auto.yaml from Terraform Outputs ==="
+        cat spec_variables.auto.yaml
+
+        echo "=== Phase 2 (No-Code CD): Deploying No-Code Agent to Gemini Enterprise (${_ENV}) ==="
         python cli/ge_agent_cli.py push \
           --vars-file spec_variables.auto.yaml \
           --template-path agents/sv_citizen_assistant/agent_template.json \
           --output-agent-id-file .resolved_agent_id
 
-        echo "=== 2. Running google-adk Golden Dataset Evaluation (${_ENV}) ==="
+        echo "=== Phase 3 (Quality Gate): Running google-adk Golden Dataset Evaluation (${_ENV}) ==="
         python eval/run_eval.py \
           --vars-file spec_variables.auto.yaml \
           --agent-id-file .resolved_agent_id \
+          --template-path agents/sv_citizen_assistant/agent_template.json \
+          --corpus-path agents/sv_citizen_assistant/corpus/manual_oficial_tramites_sv.md \
           --eval-set-path agents/sv_citizen_assistant/golden_dataset.evalset.json \
           --eval-config-path agents/sv_citizen_assistant/eval_config.json \
           --output-dir eval_results
 
         if [ "${_ENV}" = "stg" ]; then
-          echo "=== 3. Requesting HITL Agent Review in STG (:requestAgentReview) ==="
+          echo "=== Requesting HITL Agent Review in STG (:requestAgentReview) ==="
           python cli/ge_agent_cli.py request-review \
             --vars-file spec_variables.auto.yaml \
             --agent-id "$$(cat .resolved_agent_id)"
         fi
 
         if [ "${_ENV}" = "prd" ]; then
-          echo "=== 3. Creating Immutable AgentRevision & Publishing in PRD (:publish) ==="
+          echo "=== Creating Immutable AgentRevision & Publishing in PRD (:publish) ==="
           python cli/ge_agent_cli.py publish \
             --vars-file spec_variables.auto.yaml \
             --agent-id "$$(cat .resolved_agent_id)" \
@@ -84,6 +153,8 @@ substitutions:
   _GE_LOCATION: "global"
   _GE_SHARING_SCOPE: "PRIVATE"
   _GE_AGENT_ID: ""
+  _TF_PROJECT: "drm-tfproject-000"
+  _BACKEND_BUCKET: "goes-ge-tf-backend"
 
 options:
   logging: CLOUD_LOGGING_ONLY

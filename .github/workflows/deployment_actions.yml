@@ -39,4 +39,10 @@ jobs:
           cd ${{ vars.SOURCE_REPO_SN }}
           git checkout main
           git remote add target-repo https://${{ secrets.TOKEN_USER }}:x-oauth-basic@github.com/${{ vars.TARGET_REPO_FN }}
+          git fetch target-repo main || true
+          if [ "$(git rev-parse HEAD)" = "$(git rev-parse target-repo/main 2>/dev/null || echo none)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "chore(promote): promote ${{ vars.ENV }} to ${{ vars.TARGET_ENV }}"
+          fi
           git push -u target-repo main --force

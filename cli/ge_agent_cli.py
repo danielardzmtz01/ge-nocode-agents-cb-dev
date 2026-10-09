@@ -466,6 +466,53 @@ def cmd_rollback(args: argparse.Namespace) -> None:
   print(f"[rollback] Rolled back agent {agent_name} cleanly.")
 
 
+def cmd_delete(args: argparse.Namespace) -> None:
+  """Deletes a custom No-Code agent from the target Gemini Enterprise Engine (used to reset STG/PRD for clean testing)."""
+  env_vars = load_env_vars(args.vars_file)
+  project_id = env_vars["GE_PROJECT_ID"]
+  location = env_vars.get("GE_LOCATION", "global")
+  engine_id = env_vars["GE_ENGINE_ID"]
+  agent_id = args.agent_id or env_vars.get("GE_AGENT_ID")
+  display_name = args.display_name
+
+  if not display_name and Path(args.template_path).exists():
+    raw_template = Path(args.template_path).read_text(encoding="utf-8")
+    display_name = hydrate_template(raw_template, env_vars).get("displayName")
+
+  base_url = get_api_base_url(location)
+  assistant_parent = get_assistant_parent(project_id, location, engine_id)
+  headers = get_auth_headers(project_id)
+
+  existing = find_existing_agent(
+      base_url=base_url,
+      assistant_parent=assistant_parent,
+      headers=headers,
+      agent_id=agent_id,
+      display_name=display_name,
+  )
+  if not existing:
+    print(f"[delete] No matching custom agent found in {project_id} ({engine_id}). Environment is already clean.")
+    return
+
+  agent_resource_name = existing["name"]
+  del_url = f"{base_url}/{agent_resource_name}"
+  if args.dry_run:
+    print(f"[delete] --dry-run: DELETE {del_url}")
+    return
+
+  # If the agent is currently ENABLED, disable/suspend before deleting if needed
+  state = existing.get("state", "PRIVATE")
+  if state == "ENABLED":
+    disable_url = f"{base_url}/{agent_resource_name}:disableAgent"
+    requests.post(disable_url, headers=headers, json={"name": agent_resource_name}, timeout=30)
+
+  resp = requests.delete(del_url, headers=headers, timeout=60)
+  if resp.status_code in (200, 204, 404):
+    print(f"[delete] Successfully deleted custom agent: {agent_resource_name}")
+  else:
+    raise RuntimeError(f"DeleteAgent failed ({resp.status_code}): {resp.text}")
+
+
 def build_parser() -> argparse.ArgumentParser:
   parent_parser = argparse.ArgumentParser(add_help=False)
   parent_parser.add_argument(
@@ -526,6 +573,18 @@ def build_parser() -> argparse.ArgumentParser:
   p_rb.add_argument("--revision-id", help="Target revision ID to roll back to")
   p_rb.add_argument("--dry-run", action="store_true")
   p_rb.set_defaults(func=cmd_rollback)
+
+  # delete
+  p_del = subparsers.add_parser("delete", parents=[parent_parser], help="Delete custom No-Code agent from target GE environment (reset for demo)")
+  p_del.add_argument("--agent-id", help="Optional explicit Agent ID to delete")
+  p_del.add_argument("--display-name", help="Optional display name to match")
+  p_del.add_argument(
+      "--template-path",
+      default="agents/sv_citizen_assistant/agent_template.json",
+      help="Path to agent_template.json to resolve displayName",
+  )
+  p_del.add_argument("--dry-run", action="store_true")
+  p_del.set_defaults(func=cmd_delete)
 
   return parser
 

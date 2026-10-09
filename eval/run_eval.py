@@ -178,11 +178,16 @@ async def run_evaluation(args: argparse.Namespace) -> int:
       m for m in eval_metrics if m.metric_name in configured_metric_names
   ]
 
+  data_store_id = args.data_store_id or env_vars.get("GE_DATA_STORE_ID", "sv-tramites-datastore")
+
   adapter = GeminiEnterpriseAdkAdapter(
       project_id=project_id,
       location=location,
       engine_id=engine_id,
       agent_id=agent_id,
+      data_store_id=data_store_id,
+      template_path=args.template_path,
+      corpus_path=args.corpus_path,
   )
 
   print(
@@ -354,8 +359,19 @@ def main() -> None:
   parser.add_argument("--project-id", help="Override GCP Project ID")
   parser.add_argument("--location", help="Override Discovery Engine Location")
   parser.add_argument("--engine-id", help="Override Gemini Enterprise Engine ID")
+  parser.add_argument("--data-store-id", help="Override Vertex AI Search Data Store ID")
   parser.add_argument("--agent-id", help="Override Agent ID")
   parser.add_argument("--agent-id-file", help="Path to file containing Agent ID")
+  parser.add_argument(
+      "--template-path",
+      default="agents/sv_citizen_assistant/agent_template.json",
+      help="Path to agent_template.json to dynamically read agent instructions and tool declarations",
+  )
+  parser.add_argument(
+      "--corpus-path",
+      default="agents/sv_citizen_assistant/corpus/manual_oficial_tramites_sv.md",
+      help="Optional path to reference corpus markdown for offline/grounding context",
+  )
   parser.add_argument(
       "--eval-set-path",
       default="agents/sv_citizen_assistant/golden_dataset.evalset.json",

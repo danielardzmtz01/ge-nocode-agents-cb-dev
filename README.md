@@ -1,6 +1,6 @@
-# CI/CD In-Place (`dev` -> `stg` -> `prd`) & Evaluación Automatizada (`google-adk`) para Agentes No-Code en Gemini Enterprise (GOES)
+# CI/CD In-Place (`dev` -> `stg` -> `prd`), Integración IaC (Terraform) y Evaluación Automatizada (`google-adk`) para Agentes No-Code en Gemini Enterprise (GOES)
 
-Este repositorio implementa el flujo de **Integración, Evaluación Continua (LLM-as-a-Judge con `google-adk`) y Promoción In-Place Multi-Repositorio (`dev` -> `stg` -> `prd`)** para agentes **No-Code / Low-Code** creados en **Gemini Enterprise (Agent Designer)** para el **Gobierno de El Salvador (GOES)**.
+Este repositorio implementa una arquitectura empresarial completa que demuestra **cómo integrar el ciclo de vida de Agentes No-Code / Low-Code de Gemini Enterprise (Agent Designer) con la Infraestructura como Código (Terraform) de la organización**, utilizando promoción *in-place* multi-repositorio (`dev` $\rightarrow$ `stg` $\rightarrow$ `prd`) y compuertas de calidad automatizadas con **`google-adk`** (LLM-as-a-Judge) para el **Gobierno de El Salvador (GOES)**.
 
 Soporta dos motores de CI/CD con paridad funcional 1:1 desplegados dentro de la carpeta **`GOES` (`folders/402619928367`)**:
 1. **Opción A — GitHub Actions**:
@@ -10,78 +10,78 @@ Soporta dos motores de CI/CD con paridad funcional 1:1 desplegados dentro de la 
    - Repositorios: `ge-nocode-agents-cb-dev` $\rightarrow$ `ge-nocode-agents-cb-stg` $\rightarrow$ `ge-nocode-agents-cb-prd`
    - Proyectos GCP: `goes-ge-cb-dev` (`601937217732`), `goes-ge-cb-stg` (`425990910052`), `goes-ge-cb-prd` (`1068386666374`)
 
-> **Documentación Técnica Completa**: Consulta [`docs/GUIA_ARQUITECTURA_Y_OPERACION.md`](docs/GUIA_ARQUITECTURA_Y_OPERACION.md) para ver el detalle de las llamadas REST `v1alpha`, el adaptador `:streamAssist` $\rightarrow$ `google-adk`, el inventario de recursos desplegados y los comandos de operación/rollback.
-
 ---
 
-## 1. Arquitectura de Promoción In-Place (`Send To Next Environment`)
+## 1. Las 4 Capas de la Arquitectura (IaC + Agente No-Code + Evaluación ADK)
 
-Los 3 repositorios de cada flujo contienen **exactamente el mismo código base** sin IDs quemados (*hardcoded*). En tiempo de ejecución, el pipeline genera *in-place* el archivo `spec_variables.auto.yaml` a partir de las variables del repositorio o trigger (`dev`, `stg` o `prd`):
+Siguiendo el patrón corporativo multi-repositorio (`terraform_projects/` + `terraform_services/` + Despliegue Aplicativo), cada repositorio de ambiente (`dev`, `stg`, `prd`) integra 4 divisiones claras:
+
+1. **División 1 — Landing Zone en Terraform (`terraform_projects/`)**:
+   - Gestiona declarativamente la carpeta **`GOES` (`folders/402619928367`)**, los **proyectos GCP por ambiente** (`google_project`), la habilitación de **APIs** (`google_project_service`), las **Service Accounts de CI/CD** (`ge-cicd-runner`), los **roles IAM de mínimo privilegio** (`google_project_iam_member`) y los contenedores de **Secret Manager** (`google_secret_manager_secret`).
+2. **División 2 — Topología Multi-Repositorio (`dev` $\rightarrow$ `stg` $\rightarrow$ `prd`), Variables y Secretos**:
+   - Los 3 repositorios contienen **exactamente el mismo código base** sin IDs quemados (*hardcoded*). Cada repositorio define en sus *Repository Variables* su identidad (`ENV`, `GE_PROJECT_ID`, `GE_ENGINE_ID`, `GE_DATA_STORE_ID`, `GE_SHARING_SCOPE`, `TARGET_ENV`, `TARGET_REPO_FN`).
+3. **División 3 — Infraestructura de Gemini Enterprise en Terraform + Workaround `v1alpha` (`terraform_services/`)**:
+   - **Recursos Nativos Terraform**: Crea/reconcilia el bucket GCS del corpus (`google_storage_bucket.corpus_bucket`), sube el manual normativo (`google_storage_bucket_object.manual_tramites_goes`) y aprovisiona el Data Store de Vertex AI Search (`google_discovery_engine_data_store.tramites_ds`).
+   - **Workaround Declarativo (`terraform_data.gemini_enterprise_engine_and_corpus`)**: Como los recursos `v1alpha` de Gemini Enterprise (`LicenseConfig`, `UserStore`, indexación directa del documento RAG, `Engine` con `APP_TYPE_INTRANET` y `default_assistant`) aún no tienen recurso nativo en `hashicorp/google`, Terraform invoca mediante `local-exec` el reconciliador idempotente [`cli/ensure_ge_infra.py`](cli/ensure_ge_infra.py) controlado por el hash `filemd5` del documento RAG.
+   - **Outputs hacia el Despliegue No-Code**: `terraform_services/outputs.tf` exporta `ge_project_id`, `ge_location`, `ge_engine_id` y `ge_data_store_id`, con los cuales el pipeline construye automáticamente `spec_variables.auto.yaml`.
+4. **División 4 — Ciclo de Vida del Agente No-Code y Quality Gate con `google-adk` (`cli/ge_agent_cli.py` + `eval/run_eval.py`)**:
+   - **Fase 2 (Despliegue No-Code)**: `cli/ge_agent_cli.py push` consume `spec_variables.auto.yaml` (generado desde los outputs de Terraform), hidrata los placeholders de [`agent_template.json`](agents/sv_citizen_assistant/agent_template.json) (`${ENV}`, `${GE_PROJECT_ID}`, `${GE_DATA_STORE_ID}`), resuelve el `project_number` para los `dataStoreSpecs` y ejecuta `POST :deployLowCode`.
+   - **Fase 3 (Quality Gate ADK y Gobernanza)**: `eval/run_eval.py` invoca el agente desplegado vía `:streamAssist` y evalúa los **8 casos del Golden Dataset $\times$ 4 métricas oficiales de `google-adk` = 32 evaluaciones**. Si aprueba al 100%, solicita revisión HITL en `STG` (`:requestAgentReview`, `RESTRICTED`) o crea una revisión inmutable y publica en `PRD` (`:publish`, `ALL_USERS`).
 
 ```mermaid
 flowchart LR
-    subgraph DEV["Repo 1: Ambiente DEV"]
-        D1["1. Setup spec_variables.auto.yaml\n(ENV=dev, Scope=PRIVATE)"]
-        D2["2. ge_agent_cli.py push\n(:deployLowCode en Engine DEV)"]
-        D3["3. run_eval.py\n(8 Casos Golden Dataset + google-adk Gate)"]
-        D4["4. Send To Next Environment\n(git push main -> Repo STG)"]
-        D1 --> D2 --> D3 --> D4
+    subgraph P1["Fase 1: IaC (terraform_services)"]
+        T1["1. terraform init + apply\n(GCS Bucket + DataStore Nativo)"]
+        T2["2. terraform_data Workaround\n(ensure_ge_infra.py -> Engine v1alpha & Doc)"]
+        T3["3. terraform output\n(Genera spec_variables.auto.yaml)"]
+        T1 --> T2 --> T3
     end
 
-    subgraph STG["Repo 2: Ambiente STG + HITL"]
-        S1["1. Setup spec_variables.auto.yaml\n(ENV=stg, Scope=RESTRICTED)"]
-        S2["2. ge_agent_cli.py push + request-review\n(:deployLowCode + :requestAgentReview)"]
-        S3["3. run_eval.py\n(Certificación ADK en Engine STG + HITL)"]
-        S4["4. Send To Next Environment\n(git push main -> Repo PRD)"]
-        S1 --> S2 --> S3 --> S4
+    subgraph P2["Fase 2: Despliegue No-Code"]
+        N1["4. Hidratar agent_template.json\n(Inyecta Outputs de Terraform)"]
+        N2["5. ge_agent_cli.py push\n(CREATE/PATCH + :deployLowCode)"]
+        N1 --> N2
     end
 
-    subgraph PRD["Repo 3: Ambiente PRD"]
-        P1["1. Setup spec_variables.auto.yaml\n(ENV=prd, Scope=ALL_USERS)"]
-        P2["2. ge_agent_cli.py push\n(:deployLowCode en Engine PRD)"]
-        P3["3. run_eval.py\n(Smoke Test ADK en PRD)"]
-        P4["4. ge_agent_cli.py publish\n(AgentRevision Inmutable + :publish)"]
-        P1 --> P2 --> P3 --> P4
+    subgraph P3["Fase 3: Evaluación ADK & Gobernanza"]
+        E1["6. eval/run_eval.py\n(8 Casos x 4 Métricas google-adk = 32 Evals)"]
+        E2["7. Gobernanza por Ambiente\nDEV: PRIVATE | STG: :requestAgentReview | PRD: :publish"]
+        E3["8. Send To Next Environment\n(Promoción Git dev -> stg -> prd)"]
+        E1 --> E2 --> E3
     end
 
-    D4 ==>|"32/32 Métricas ADK PASSED"| S1
-    S4 ==>|"Aprobación HITL + Promoción"| P1
+    T3 ==> N1
+    N2 ==> E1
 ```
 
 ---
 
-## 2. Inventario de Despliegues Certificados en Vivo (`folders/402619928367` — `GOES`)
-
-### Ejemplo 1: GitHub Actions (`goes-ge-gha-{dev,stg,prd}`)
-
-| Ambiente | Repositorio GitHub | Proyecto GCP (`GOES`) | Agent ID en GE | Estado / Scope | Active Revision (`:publish`) | Resultado ADK Gate |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`DEV`** | `danielardzmtz01/ge-nocode-agents-dev` | `goes-ge-gha-dev` (`1076809815833`) | `2172421677339450929` | `PRIVATE` / `ENABLED` | `5074119707885744899` | **PASSED (`32/32 = 1.0`)** |
-| **`STG`** | `danielardzmtz01/ge-nocode-agents-stg` | `goes-ge-gha-stg` (`345628853626`) | `11971858956007198093` | `ENABLED` / `RESTRICTED` | — | **PASSED (`32/32 = 1.0`)** |
-| **`PRD`** | `danielardzmtz01/ge-nocode-agents-prd` | `goes-ge-gha-prd` (`30228259118`) | `3395946724750775553` | `ENABLED` / `ALL_USERS` | **`14012846407794653890`** | **PASSED (`32/32 = 1.0`)** |
-
-### Ejemplo 2: Google Cloud Build (`goes-ge-cb-{dev,stg,prd}`)
-
-| Ambiente | Repositorio GitHub | Proyecto GCP (`GOES`) | Agent ID en GE | Estado / Scope | Active Revision (`:publish`) | Resultado ADK Gate |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`DEV`** | `danielardzmtz01/ge-nocode-agents-cb-dev` | `goes-ge-cb-dev` (`601937217732`) | `14529129893765249992` | `PRIVATE` / `PRIVATE` | — | **PASSED (`32/32 = 1.0`)** |
-| **`STG`** | `danielardzmtz01/ge-nocode-agents-cb-stg` | `goes-ge-cb-stg` (`425990910052`) | `4987620311259970191` | `ENABLED` / `RESTRICTED` | — | **PASSED (`32/32 = 1.0`)** |
-| **`PRD`** | `danielardzmtz01/ge-nocode-agents-cb-prd` | `goes-ge-cb-prd` (`1068386666374`) | `3632113936026526418` | `ENABLED` / `ALL_USERS` | **`8793931032536939173`** | **PASSED (`32/32 = 1.0`)** |
-
----
-
-## 3. Estructura del Repositorio
+## 2. Estructura del Repositorio
 
 ```text
 .
 ├── .github/workflows/                         # OPCIÓN A: GitHub Actions
-│   ├── ge_agent_deploy_and_eval.yml           # Hidrata spec_variables.auto.yaml, despliega en GE y evalúa con google-adk
-│   └── deployment_actions.yml                 # "Send To Next Environment" (clona SOURCE_REPO_FN y hace push a TARGET_REPO_FN)
+│   ├── ge_agent_deploy_and_eval.yml           # Pipeline Integrado: Fase 1 (Terraform) -> Fase 2 (No-Code Deploy) -> Fase 3 (ADK Eval)
+│   ├── deployment_actions.yml                 # "Send To Next Environment" (promueve dev -> stg y stg -> prd)
+│   ├── terraform_projects.yml                 # Workflow dedicado para Landing Zone (División 1: GOES Folder, Proyectos, APIs, IAM)
+│   ├── terraform_services.yml                 # Workflow dedicado para Servicios GE (División 3: DataStore, Bucket y Workaround v1alpha)
+│   └── reset_environment.yml                  # "Reset Environment Custom Agent" (limpia el agente custom en STG/PRD para demos en vivo)
 ├── cloudbuild/                                # OPCIÓN B: Google Cloud Build
-│   ├── cloudbuild_deploy_and_eval.yaml        # Pipeline de despliegue No-Code + Evaluación ADK por ambiente
+│   ├── cloudbuild_deploy_and_eval.yaml        # Pipeline Integrado: Fase 1 (Terraform) -> Fase 2 (No-Code Deploy) -> Fase 3 (ADK Eval)
 │   └── cloudbuild_deployment_actions.yaml     # Pipeline "Send To Next Environment" con Secret Manager
+├── terraform_projects/                        # DIVISIÓN 1: IaC de Landing Zone (Carpeta GOES, 6 Proyectos, APIs, IAM, Secret Manager)
+│   ├── provider.tf
+│   ├── variables.tf
+│   ├── folders.tf
+│   └── projects.tf
+├── terraform_services/                        # DIVISIÓN 3: IaC por Ambiente (Bucket Corpus, DataStore Nativo y Workaround Engine v1alpha)
+│   ├── provider.tf
+│   ├── variables.tf
+│   ├── main.tf
+│   └── outputs.tf
 ├── cli/
-│   └── ge_agent_cli.py                        # CLI para pull, push (:deployLowCode), request-review, publish (/revisions) y rollback
+│   ├── ensure_ge_infra.py                     # Reconciliador idempotente invocado por terraform_data para recursos v1alpha de GE
+│   └── ge_agent_cli.py                        # CLI para pull, push (:deployLowCode), request-review, publish (:publish), rollback y delete
 ├── eval/
 │   ├── ge_adk_adapter.py                      # Invoca :streamAssist en GE y traduce la respuesta a google.adk.evaluation.eval_case.Invocation
 │   └── run_eval.py                            # Ejecuta concurrentemente el Golden Dataset con los evaluadores oficiales de google-adk
@@ -93,37 +93,25 @@ flowchart LR
 │       └── corpus/
 │           └── manual_oficial_tramites_sv.md  # Documento normativo oficial indexado en sv-tramites-datastore
 └── docs/
-    ├── GUIA_ARQUITECTURA_Y_OPERACION.md       # Guía técnica y operativa detallada
+    ├── GUIA_ARQUITECTURA_Y_OPERACION.md       # Guía técnica y operativa detallada paso a paso
     └── diagrams/                              # Diagramas Mermaid (.mmd) de GitHub Actions y Cloud Build
 ```
 
 ---
 
-## 4. Comandos Rápidos de Operación Local
+## 3. Guía Rápida para Prueba Manual en Vivo (`DEV` $\rightarrow$ `STG` $\rightarrow$ `PRD`)
 
-```bash
-# 1. Exportar cambios hechos en la consola visual Agent Designer (DEV) hacia agent_template.json
-python3 cli/ge_agent_cli.py pull \
-  --project-id goes-ge-gha-dev \
-  --location global \
-  --engine-id sv-citizen-engine \
-  --agent-id 2172421677339450929 \
-  --data-store-id sv-tramites-datastore \
-  --template-path agents/sv_citizen_assistant/agent_template.json
+El entorno se encuentra preparado con **`DEV` desplegado y activo** (para que puedas ver o editar el agente visualmente en Agent Designer), mientras que **`STG` y `PRD` están limpios (sin el agente custom)** listos para que ejecutes la promoción manualmente:
 
-# 2. Hidratar y desplegar el agente No-Code (:deployLowCode) en un ambiente
-ENV=dev GE_PROJECT_ID=goes-ge-gha-dev GE_LOCATION=global \
-GE_ENGINE_ID=sv-citizen-engine GE_DATA_STORE_ID=sv-tramites-datastore \
-GE_SHARING_SCOPE=PRIVATE python3 cli/ge_agent_cli.py push \
-  --template-path agents/sv_citizen_assistant/agent_template.json \
-  --output-agent-id-file .resolved_agent_id
-
-# 3. Ejecutar la suite de evaluación google-adk (8 casos x 4 métricas = 32 evaluaciones)
-ENV=dev GE_PROJECT_ID=goes-ge-gha-dev GE_LOCATION=global \
-GE_ENGINE_ID=sv-citizen-engine GE_DATA_STORE_ID=sv-tramites-datastore \
-python3 eval/run_eval.py \
-  --agent-id-file .resolved_agent_id \
-  --eval-set-path agents/sv_citizen_assistant/golden_dataset.evalset.json \
-  --eval-config-path agents/sv_citizen_assistant/eval_config.json \
-  --output-dir eval_results
-```
+1. **Inspeccionar o Editar en `DEV` (Opcional)**:
+   - Abre la consola de **Gemini Enterprise -> Agent Designer** en el proyecto `goes-ge-gha-dev` (Engine `sv-citizen-engine`).
+   - Verás el agente **`Asistente de Trámites Ciudadanos - Gobierno de El Salvador (DEV)`** (`ID: 2172421677339450929`).
+   - Si modificas su prompt en la UI, expórtalo a Git con `python3 cli/ge_agent_cli.py pull` y haz `git push origin main` en `ge-nocode-agents-dev`.
+2. **Promover `DEV` $\rightarrow$ `STG`**:
+   - En el repositorio **`danielardzmtz01/ge-nocode-agents-dev`**, ve a **Actions** $\rightarrow$ **`Send To Next Environment`** $\rightarrow$ haz clic en **`Run workflow`**.
+   - Luego abre la pestaña **Actions** de **`danielardzmtz01/ge-nocode-agents-stg`**: verás ejecutarse automáticamente **`GE No-Code Agent Deploy & ADK Eval Actions`**, que correrá **Fase 1 (Terraform)** $\rightarrow$ **Fase 2 (`:deployLowCode` en `goes-ge-gha-stg`)** $\rightarrow$ **Fase 3 (`google-adk` 32/32 métricas + `:requestAgentReview`)**.
+3. **Promover `STG` $\rightarrow$ `PRD`**:
+   - Una vez en verde `STG`, en **`danielardzmtz01/ge-nocode-agents-stg`** ve a **Actions** $\rightarrow$ **`Send To Next Environment`** $\rightarrow$ haz clic en **`Run workflow`**.
+   - Abre la pestaña **Actions** de **`danielardzmtz01/ge-nocode-agents-prd`**: verás ejecutarse **`GE No-Code Agent Deploy & ADK Eval Actions`**, que correrá **Fase 1 (Terraform)** $\rightarrow$ **Fase 2 (`:deployLowCode` en `goes-ge-gha-prd`)** $\rightarrow$ **Fase 3 (`google-adk` 32/32 métricas + `:publish` con `AgentRevision` inmutable y alcance `ALL_USERS`)**.
+4. **Resetear `STG` y `PRD` para una nueva demostración**:
+   - En cualquier momento puedes ir a **Actions** $\rightarrow$ **`Reset Environment Custom Agent`** $\rightarrow$ **`Run workflow`** en `ge-nocode-agents-stg` y `ge-nocode-agents-prd` para eliminar el agente custom de `STG` y `PRD` y volver a empezar desde cero.

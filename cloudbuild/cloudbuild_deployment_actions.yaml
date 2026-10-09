@@ -28,6 +28,12 @@ steps:
         cd ${_SOURCE_REPO_SN}
         git checkout main
         git remote add target-repo https://$$TOKEN_USER:x-oauth-basic@github.com/${_TARGET_REPO_FN}
+        git fetch target-repo main || true
+        if [ "$$(git rev-parse HEAD)" = "$$(git rev-parse target-repo/main 2>/dev/null || echo none)" ]; then
+          git config user.name "cloud-build-promoter"
+          git config user.email "cloud-build@google.com"
+          git commit --allow-empty -m "chore(promote): promote ${_ENV} to ${_TARGET_ENV}"
+        fi
         git push -u target-repo main --force
 
 availableSecrets:

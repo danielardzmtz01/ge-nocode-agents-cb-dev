@@ -1,0 +1,45 @@
+# Manual workflow to delete the custom No-Code Agent in the current environment (e.g., reset STG / PRD before a live demo)
+
+name: Reset Environment Custom Agent
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reset-custom-agent:
+    name: "Delete Custom No-Code Agent (${{ vars.ENV || 'dev' }})"
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install CLI dependencies
+        run: pip install -r requirements.txt
+
+      - name: Configure GCP Application Default Credentials
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          echo "${GOOGLE_CREDENTIALS}" > "${RUNNER_TEMP}/gcp_adc.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=${RUNNER_TEMP}/gcp_adc.json" >> "${GITHUB_ENV}"
+
+      - name: Delete Custom No-Code Agent from Gemini Enterprise (${{ vars.ENV }})
+        run: |
+          cat > spec_variables.auto.yaml <<EOF
+          env: "${{ vars.ENV || 'dev' }}"
+          ge_project_id: "${{ vars.GE_PROJECT_ID }}"
+          ge_location: "${{ vars.GE_LOCATION || 'global' }}"
+          ge_engine_id: "${{ vars.GE_ENGINE_ID || 'sv-citizen-engine' }}"
+          ge_data_store_id: "${{ vars.GE_DATA_STORE_ID || 'sv-tramites-datastore' }}"
+          ge_sharing_scope: "${{ vars.GE_SHARING_SCOPE || 'PRIVATE' }}"
+          EOF
+          python cli/ge_agent_cli.py delete --vars-file spec_variables.auto.yaml

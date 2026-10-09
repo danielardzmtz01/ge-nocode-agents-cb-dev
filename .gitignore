@@ -1,6 +1,15 @@
 # In-place generated CI/CD environment variables (generated at runtime like *.auto.tfvars)
 *.auto.yaml
 *.auto.json
+*.auto.tfvars
+backend.tf
+.resolved_agent_id
+
+# Terraform local state and plugins
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
 
 # Evaluation outputs & reports
 eval_results/

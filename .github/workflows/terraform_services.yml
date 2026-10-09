@@ -1,0 +1,104 @@
+# Github Actions to execute Terraform Services (Data Store, GCS Corpus & Gemini Enterprise v1alpha Workaround)
+
+name: Terraform Services Actions
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  terraform-services:
+    name: "Terraform Services Execute (${{ vars.ENV }})"
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: ./terraform_services
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Python dependencies for v1alpha workaround
+        working-directory: .
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Configure GCP Application Default Credentials
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          echo "${GOOGLE_CREDENTIALS}" > "${RUNNER_TEMP}/gcp_adc.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=${RUNNER_TEMP}/gcp_adc.json" >> "${GITHUB_ENV}"
+
+      - name: Ensure Centralized Remote State GCS Bucket in drm-tfproject-000 & Backend Config
+        run: |
+          python3 - <<'EOF'
+          import google.auth
+          from google.auth.transport.requests import Request
+          import requests
+
+          tf_project = "${{ vars.TF_PROJECT || 'drm-tfproject-000' }}"
+          bucket_name = "${{ vars.BACKEND_BUCKET || 'goes-ge-tf-backend' }}"
+          creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+          creds.refresh(Request())
+          headers = {"Authorization": f"Bearer {creds.token}", "Content-Type": "application/json"}
+          r = requests.get(f"https://storage.googleapis.com/storage/v1/b/{bucket_name}", headers=headers, timeout=30)
+          if r.status_code == 404:
+              r_create = requests.post(
+                  f"https://storage.googleapis.com/storage/v1/b?project={tf_project}",
+                  headers=headers,
+                  json={"name": bucket_name, "location": "US", "iamConfiguration": {"uniformBucketLevelAccess": {"enabled": True}}},
+                  timeout=30,
+              )
+              print(f"Created centralized Terraform state bucket gs://{bucket_name} in {tf_project}: {r_create.status_code}")
+          else:
+              print(f"Centralized Terraform state bucket gs://{bucket_name} ({tf_project}) already exists.")
+          EOF
+
+          cat > backend.tf <<EOF
+          terraform {
+            backend "gcs" {
+              bucket = "${{ vars.BACKEND_BUCKET || 'goes-ge-tf-backend' }}"
+              prefix = "${{ vars.ENV }}/services/terraform/state"
+            }
+          }
+          EOF
+
+      - name: Setup specific variables (spec_variables.auto.tfvars)
+        run: |-
+          cat > spec_variables.auto.tfvars <<EOF
+          env              = "${{ vars.ENV }}"
+          ge_project_id    = "${{ vars.GE_PROJECT_ID }}"
+          ge_location      = "${{ vars.GE_LOCATION }}"
+          ge_engine_id     = "${{ vars.GE_ENGINE_ID }}"
+          ge_data_store_id = "${{ vars.GE_DATA_STORE_ID }}"
+          EOF
+
+      - name: Terraform Init & Adopt Existing Resources
+        run: |
+          terraform init
+          if ! terraform state show google_discovery_engine_data_store.tramites_ds >/dev/null 2>&1; then
+            terraform import google_discovery_engine_data_store.tramites_ds \
+              "projects/${{ vars.GE_PROJECT_ID }}/locations/${{ vars.GE_LOCATION }}/collections/default_collection/dataStores/${{ vars.GE_DATA_STORE_ID }}" || true
+          fi
+
+      - name: Terraform Plan
+        run: terraform plan
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve
