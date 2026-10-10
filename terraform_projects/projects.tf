@@ -125,6 +125,12 @@ resource "google_service_account_iam_member" "gha_wif_binding" {
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github_pool.name}/attribute.repository/danielardzmtz01/ge-nocode-agents-${lower(var.env)}"
 }
 
+resource "google_service_account_iam_member" "gha_wif_token_creator" {
+  service_account_id = google_service_account.cicd_runner["gha"].name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github_pool.name}/attribute.repository/danielardzmtz01/ge-nocode-agents-${lower(var.env)}"
+}
+
 # 6. Secreto en Secret Manager (para Cloud Build: github-pat para promover entre repos)
 resource "google_secret_manager_secret" "github_pat" {
   project   = google_project.goes_env_projects["cb"].project_id
