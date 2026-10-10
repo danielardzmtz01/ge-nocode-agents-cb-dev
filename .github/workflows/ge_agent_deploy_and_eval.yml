@@ -43,29 +43,16 @@ jobs:
         with:
           terraform_wrapper: false
 
-      # Authenticate via Keyless Workload Identity Federation when WIF_PROVIDER is set
-      - name: Authenticate to Google Cloud (WIF)
-        if: vars.WIF_PROVIDER != ''
+      # Authenticate via Keyless Workload Identity Federation (WIF)
+      - name: Authenticate to Google Cloud (Keyless WIF)
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.WIF_PROVIDER }}
           service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
 
-      - name: Configure GCP Application Default Credentials
-        if: vars.WIF_PROVIDER == ''
-        env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-        run: |
-          if [ -n "${GOOGLE_CREDENTIALS}" ]; then
-            echo "${GOOGLE_CREDENTIALS}" > "${RUNNER_TEMP}/gcp_adc.json"
-            echo "GOOGLE_APPLICATION_CREDENTIALS=${RUNNER_TEMP}/gcp_adc.json" >> "${GITHUB_ENV}"
-          fi
-
       - name: "Phase 1 (IaC): Terraform Init, Plan & Apply (Centralized State in drm-tfproject-000)"
-        env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: |
-          if [ -n "${{ vars.GE_PROJECT_ID }}" ] && [ -n "${{ vars.WIF_PROVIDER }}${GOOGLE_CREDENTIALS}" ]; then
+          if [ -n "${{ vars.GE_PROJECT_ID }}" ] && [ -n "${{ vars.WIF_PROVIDER }}" ]; then
             python3 - <<'EOF'
           import google.auth
           from google.auth.transport.requests import Request
@@ -150,16 +137,14 @@ jobs:
           cat spec_variables.auto.yaml
 
       - name: "Phase 2 (No-Code CD): Push & Deploy No-Code Agent to Gemini Enterprise (${{ vars.ENV }})"
-        env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: |
-          if [ -n "${{ vars.GE_PROJECT_ID }}" ] && [ -n "${{ vars.WIF_PROVIDER }}${GOOGLE_CREDENTIALS}" ]; then
+          if [ -n "${{ vars.GE_PROJECT_ID }}" ] && [ -n "${{ vars.WIF_PROVIDER }}" ]; then
             python cli/ge_agent_cli.py push \
               --vars-file spec_variables.auto.yaml \
               --template-path agents/sv_citizen_assistant/agent_template.json \
               --output-agent-id-file .resolved_agent_id
           else
-            echo "Running in Demo/Showcase Mode (GE_PROJECT_ID / GCP Auth not set) -> Validating hydrated No-Code payload:"
+            echo "Running in Demo/Showcase Mode (GE_PROJECT_ID / WIF_PROVIDER not set) -> Validating hydrated No-Code payload:"
             python cli/ge_agent_cli.py push \
               --vars-file spec_variables.auto.yaml \
               --template-path agents/sv_citizen_assistant/agent_template.json \
@@ -168,10 +153,8 @@ jobs:
           fi
 
       - name: "Phase 3 (Quality Gate): Execute ADK Golden Dataset Evaluation (${{ vars.ENV }})"
-        env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: |
-          if [ -n "${{ vars.GE_PROJECT_ID }}" ] && [ -n "${{ vars.WIF_PROVIDER }}${GOOGLE_CREDENTIALS}" ]; then
+          if [ -n "${{ vars.GE_PROJECT_ID }}" ] && [ -n "${{ vars.WIF_PROVIDER }}" ]; then
             python eval/run_eval.py \
               --vars-file spec_variables.auto.yaml \
               --agent-id-file .resolved_agent_id \
@@ -194,10 +177,8 @@ jobs:
 
       - name: Request HITL Agent Review (STG only)
         if: vars.ENV == 'stg' && github.event_name != 'pull_request'
-        env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: |
-          if [ -n "${{ vars.GE_PROJECT_ID }}" ] && [ -n "${{ vars.WIF_PROVIDER }}${GOOGLE_CREDENTIALS}" ]; then
+          if [ -n "${{ vars.GE_PROJECT_ID }}" ] && [ -n "${{ vars.WIF_PROVIDER }}" ]; then
             python cli/ge_agent_cli.py request-review \
               --vars-file spec_variables.auto.yaml \
               --agent-id "$(cat .resolved_agent_id)"
@@ -210,10 +191,8 @@ jobs:
 
       - name: Create Immutable Revision & Publish No-Code Agent (PRD only)
         if: vars.ENV == 'prd' && github.event_name != 'pull_request'
-        env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: |
-          if [ -n "${{ vars.GE_PROJECT_ID }}" ] && [ -n "${{ vars.WIF_PROVIDER }}${GOOGLE_CREDENTIALS}" ]; then
+          if [ -n "${{ vars.GE_PROJECT_ID }}" ] && [ -n "${{ vars.WIF_PROVIDER }}" ]; then
             python cli/ge_agent_cli.py publish \
               --vars-file spec_variables.auto.yaml \
               --agent-id "$(cat .resolved_agent_id)" \

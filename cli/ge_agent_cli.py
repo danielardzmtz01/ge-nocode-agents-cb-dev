@@ -339,6 +339,11 @@ def cmd_push(args: argparse.Namespace) -> None:
   deploy_resp = requests.post(deploy_url, headers=headers, json=deploy_body, timeout=120)
   if not deploy_resp.ok:
     raise RuntimeError(f"Deploy failed ({deploy_resp.status_code}): {deploy_resp.text}")
+
+  if saved_agent.get("state", "PRIVATE") == "PRIVATE":
+    rev_url = f"{base_url}/{agent_resource_name}:requestAgentReview"
+    requests.post(rev_url, headers=headers, json={"name": agent_resource_name}, timeout=30)
+
   print(f"[push] Successfully deployed agent '{hydrated_agent.get('displayName')}' (ID: {resolved_agent_id})")
 
   if args.output_agent_id_file:

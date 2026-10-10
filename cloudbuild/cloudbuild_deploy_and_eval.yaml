@@ -13,18 +13,14 @@
 
 steps:
   # Step 1: Phase 1 (Terraform IaC), Phase 2 (No-Code Deploy), and Phase 3 (google-adk Evaluation Gate)
+  # Authenticated natively via attached Cloud Build Service Account: ge-cicd-runner@$PROJECT_ID.iam.gserviceaccount.com
   - name: "python:3.11-slim"
     id: "iac-deploy-and-evaluate-adk"
-    secretEnv: ["GOOGLE_CREDENTIALS_JSON"]
     entrypoint: "bash"
     args:
       - "-c"
       - |
         set -e
-        if [ -n "$$GOOGLE_CREDENTIALS_JSON" ]; then
-          printf "%s" "$$GOOGLE_CREDENTIALS_JSON" > /workspace/.gcp_adc.json
-          export GOOGLE_APPLICATION_CREDENTIALS="/workspace/.gcp_adc.json"
-        fi
         pip install --quiet -r requirements.txt
 
         echo "=== Installing Terraform CLI 1.9.8 ==="
@@ -141,12 +137,8 @@ steps:
             --agent-id "$$(cat .resolved_agent_id)" \
             --version-description "Cloud Build release commit ${SHORT_SHA:-manual}"
         fi
-        rm -f /workspace/.gcp_adc.json
 
-availableSecrets:
-  secretManager:
-    - versionName: projects/$PROJECT_ID/secrets/ge-adc-credentials/versions/latest
-      env: "GOOGLE_CREDENTIALS_JSON"
+serviceAccount: "projects/$PROJECT_ID/serviceAccounts/ge-cicd-runner@$PROJECT_ID.iam.gserviceaccount.com"
 
 substitutions:
   _ENV: "dev"

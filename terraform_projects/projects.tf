@@ -88,19 +88,45 @@ resource "google_project_iam_member" "cicd_runner_roles" {
   member   = "serviceAccount:${google_service_account.cicd_runner[each.value.track_key].email}"
 }
 
-# 5. Secretos en Secret Manager (para Cloud Build: github-pat y ge-adc-credentials)
+# 5. Workload Identity Federation (Keyless OIDC para GitHub Actions)
+resource "google_iam_workload_identity_pool" "github_pool" {
+  project                   = google_project.goes_env_projects["gha"].project_id
+  workload_identity_pool_id = "github-actions-pool"
+  display_name              = "GitHub Actions Pool"
+  description               = "Keyless OIDC Federation for GitHub Actions CI/CD"
+  depends_on                = [google_project_service.enabled_apis]
+}
+
+resource "google_iam_workload_identity_pool_provider" "github_provider" {
+  project                            = google_project.goes_env_projects["gha"].project_id
+  workload_identity_pool_id          = google_iam_workload_identity_pool.github_pool.workload_identity_pool_id
+  workload_identity_pool_provider_id = "github-provider"
+  display_name                       = "GitHub Actions OIDC"
+
+  attribute_mapping = {
+    "google.subject"             = "assertion.sub"
+    "attribute.actor"            = "assertion.actor"
+    "attribute.repository"       = "assertion.repository"
+    "attribute.repository_owner" = "assertion.repository_owner"
+  }
+
+  attribute_condition = "assertion.repository_owner == 'danielardzmtz01'"
+
+  oidc {
+    issuer_uri = "https://token.actions.githubusercontent.com"
+  }
+}
+
+resource "google_service_account_iam_member" "gha_wif_binding" {
+  service_account_id = google_service_account.cicd_runner["gha"].name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github_pool.name}/attribute.repository/danielardzmtz01/ge-nocode-agents-${lower(var.env)}"
+}
+
+# 6. Secreto en Secret Manager (para Cloud Build: github-pat para promover entre repos)
 resource "google_secret_manager_secret" "github_pat" {
   project   = google_project.goes_env_projects["cb"].project_id
   secret_id = "github-pat"
-  replication {
-    auto {}
-  }
-  depends_on = [google_project_service.enabled_apis]
-}
-
-resource "google_secret_manager_secret" "ge_adc_credentials" {
-  project   = google_project.goes_env_projects["cb"].project_id
-  secret_id = "ge-adc-credentials"
   replication {
     auto {}
   }
@@ -112,7 +138,22 @@ output "gha_project_id" {
   description = "Project ID for GitHub Actions track in current environment"
 }
 
+output "gha_wif_provider" {
+  value       = google_iam_workload_identity_pool_provider.github_provider.name
+  description = "Workload Identity Provider resource name for GitHub Actions"
+}
+
+output "gha_service_account" {
+  value       = google_service_account.cicd_runner["gha"].email
+  description = "Dedicated CI/CD Service Account email for GitHub Actions"
+}
+
 output "cb_project_id" {
   value       = google_project.goes_env_projects["cb"].project_id
   description = "Project ID for Cloud Build track in current environment"
+}
+
+output "cb_service_account" {
+  value       = google_service_account.cicd_runner["cb"].email
+  description = "Dedicated CI/CD Service Account email for Cloud Build"
 }

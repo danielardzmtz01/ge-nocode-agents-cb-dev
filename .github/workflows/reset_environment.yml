@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   reset-custom-agent:
@@ -25,12 +26,11 @@ jobs:
       - name: Install CLI dependencies
         run: pip install -r requirements.txt
 
-      - name: Configure GCP Application Default Credentials
-        env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-        run: |
-          echo "${GOOGLE_CREDENTIALS}" > "${RUNNER_TEMP}/gcp_adc.json"
-          echo "GOOGLE_APPLICATION_CREDENTIALS=${RUNNER_TEMP}/gcp_adc.json" >> "${GITHUB_ENV}"
+      - name: Authenticate to Google Cloud (Keyless WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
 
       - name: Delete Custom No-Code Agent from Gemini Enterprise (${{ vars.ENV }})
         run: |

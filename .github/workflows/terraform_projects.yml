@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   terraform-projects:
@@ -26,12 +27,11 @@ jobs:
         with:
           terraform_wrapper: false
 
-      - name: Configure GCP Application Default Credentials
-        env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-        run: |
-          echo "${GOOGLE_CREDENTIALS}" > "${RUNNER_TEMP}/gcp_adc.json"
-          echo "GOOGLE_APPLICATION_CREDENTIALS=${RUNNER_TEMP}/gcp_adc.json" >> "${GITHUB_ENV}"
+      - name: Authenticate to Google Cloud (Keyless WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
 
       - name: Setup backend (Centralized GCS State Bucket in drm-tfproject-000)
         run: |-
@@ -47,15 +47,13 @@ jobs:
       - name: Setup environment variables (spec_variables.auto.tfvars)
         run: |-
           cat > spec_variables.auto.tfvars <<EOF
-          org_id            = "${{ secrets.ORG_ID || '298580255441' }}"
+          org_id            = "${{ secrets.ORG_ID || '356347302685' }}"
           billing_account   = "${{ secrets.BILL_ACT }}"
           terraform_project = "${{ vars.TF_PROJECT || 'drm-tfproject-000' }}"
           env               = "${{ vars.ENV }}"
           EOF
 
       - name: Terraform Init & Plan
-        env:
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: |
           terraform init
           terraform plan
