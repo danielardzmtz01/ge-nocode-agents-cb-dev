@@ -29,6 +29,8 @@ locals {
 
   cicd_roles = [
     "roles/discoveryengine.admin",
+    "roles/discoveryengine.user",
+    "roles/discoveryengine.agentspaceUser",
     "roles/aiplatform.user",
     "roles/storage.admin",
     "roles/secretmanager.secretAccessor",
