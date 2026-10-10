@@ -22,7 +22,7 @@ flowchart TD
             direction LR
             Designer["`**Diseñador de Agentes**<br>Gobierno de El Salvador`"]:::gcpBlue
             Designer@{ icon: "fa:user" }
-            GE_UI["`**GE Agent Designer UI**<br>No-Code / Low-Code`"]:::gcpBlue
+            GE_UI["`**GE Agent Designer UI**<br>No-Code / Low-Code (DEV)`"]:::gcpBlue
             GE_UI@{ icon: "gcp:vertexai" }
             Pull_CLI["`**ge_agent_cli.py pull**<br>GetAgent + Parametrización`"]
             Pull_CLI@{ icon: "logos:python" }
@@ -38,11 +38,11 @@ flowchart TD
         wpA_dst((("A"))):::wp_blue
         Repo_Dev["`**Repo GitHub DEV**<br>agent_template.json + EvalSet`"]
         Repo_Dev@{ icon: "logos:github" }
-        CI_Dev["`**GitHub Actions**<br>Hidrata spec_variables.auto.yaml`"]:::gcpBlue
+        CI_Dev["`**GitHub Actions (Keyless WIF)**<br>pull (DEV) + spec_variables.auto.yaml`"]:::gcpBlue
         CI_Dev@{ icon: "gcp:cloud-build" }
-        GE_Dev["`**Gemini Enterprise DEV**<br>:deployLowCode (Scope: PRIVATE)`"]:::gcpBlue
+        GE_Dev["`**Gemini Enterprise DEV**<br>Agente No-Code (Scope: PRIVATE)`"]:::gcpBlue
         GE_Dev@{ icon: "gcp:vertexai" }
-        ADK_Dev["`**Adapter :streamAssist -> ADK**<br>8 Casos Golden Dataset Gate`"]:::gcpGreen
+        ADK_Dev["`**Adapter :streamAssist -> ADK**<br>8 Casos x 4 Métricas = 32 Evals`"]:::gcpGreen
         ADK_Dev@{ icon: "gcp:vertexai" }
 
         wpA_dst ==> Repo_Dev --> CI_Dev --> GE_Dev --> ADK_Dev
@@ -55,7 +55,7 @@ flowchart TD
         wpB_dst((("B"))):::wp_green
         Repo_Stg["`**Repo GitHub STG**<br>Promoción In-Place (main)`"]
         Repo_Stg@{ icon: "logos:github" }
-        CI_Stg["`**GitHub Actions**<br>Hidrata ENV=stg`"]:::gcpYellow
+        CI_Stg["`**GitHub Actions (Keyless WIF)**<br>Hidrata ENV=stg`"]:::gcpYellow
         CI_Stg@{ icon: "gcp:cloud-build" }
         GE_Stg["`**Gemini Enterprise STG**<br>:deployLowCode + :requestAgentReview`"]:::gcpYellow
         GE_Stg@{ icon: "gcp:vertexai" }
@@ -72,7 +72,7 @@ flowchart TD
         wpC_dst((("C"))):::wp_yellow
         Repo_Prd["`**Repo GitHub PRD**<br>Guard: !contains(prd)`"]
         Repo_Prd@{ icon: "logos:github" }
-        CI_Prd["`**GitHub Actions**<br>Hidrata ENV=prd`"]:::gcpGreen
+        CI_Prd["`**GitHub Actions (Keyless WIF)**<br>Hidrata ENV=prd`"]:::gcpGreen
         CI_Prd@{ icon: "gcp:cloud-build" }
         GE_Prd["`**Gemini Enterprise PRD**<br>:deployLowCode + Smoke Test ADK`"]:::gcpGreen
         GE_Prd@{ icon: "gcp:vertexai" }

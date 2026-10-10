@@ -22,7 +22,7 @@ flowchart TD
             direction LR
             Designer["`**Diseñador de Agentes**<br>Gobierno de El Salvador`"]:::gcpBlue
             Designer@{ icon: "fa:user" }
-            GE_UI["`**GE Agent Designer UI**<br>No-Code / Low-Code`"]:::gcpBlue
+            GE_UI["`**GE Agent Designer UI**<br>No-Code / Low-Code (DEV)`"]:::gcpBlue
             GE_UI@{ icon: "gcp:vertexai" }
             Pull_CLI["`**ge_agent_cli.py pull**<br>GetAgent + Parametrización`"]
             Pull_CLI@{ icon: "logos:python" }
@@ -38,11 +38,11 @@ flowchart TD
         wpA_dst((("A"))):::wp_blue
         Repo_Dev["`**Repo GitHub DEV**<br>ge-nocode-agents-cb-dev`"]
         Repo_Dev@{ icon: "logos:github" }
-        CB_Deploy_Dev["`**Cloud Build Deploy & Eval**<br>cloudbuild_deploy_and_eval.yaml (_ENV=dev)`"]:::gcpBlue
+        CB_Deploy_Dev["`**Cloud Build (SA ge-cicd-runner)**<br>cloudbuild_deploy_and_eval.yaml (_ENV=dev)`"]:::gcpBlue
         CB_Deploy_Dev@{ icon: "gcp:cloud-build" }
-        GE_Dev["`**Gemini Enterprise DEV**<br>:deployLowCode + :streamAssist ADK Gate`"]:::gcpGreen
+        GE_Dev["`**Gemini Enterprise DEV**<br>pull + :streamAssist ADK Gate (32/32)`"]:::gcpGreen
         GE_Dev@{ icon: "gcp:vertexai" }
-        SM_Dev["`**Secret Manager**<br>github-token-user + ge-adc-credentials`"]:::gcpBlue
+        SM_Dev["`**Secret Manager**<br>github-token-user (Promoción Git)`"]:::gcpBlue
         SM_Dev@{ icon: "gcp:secret-manager" }
         CB_Promo_Dev["`**Cloud Build Promote**<br>cloudbuild_deployment_actions.yaml`"]:::gcpBlue
         CB_Promo_Dev@{ icon: "gcp:cloud-build" }
@@ -58,7 +58,7 @@ flowchart TD
         wpB_dst((("B"))):::wp_green
         Repo_Stg["`**Repo GitHub STG**<br>ge-nocode-agents-cb-stg`"]
         Repo_Stg@{ icon: "logos:github" }
-        CB_Deploy_Stg["`**Cloud Build Deploy & Eval**<br>cloudbuild_deploy_and_eval.yaml (_ENV=stg)`"]:::gcpYellow
+        CB_Deploy_Stg["`**Cloud Build (SA ge-cicd-runner)**<br>cloudbuild_deploy_and_eval.yaml (_ENV=stg)`"]:::gcpYellow
         CB_Deploy_Stg@{ icon: "gcp:cloud-build" }
         GE_Stg["`**Gemini Enterprise STG**<br>:deployLowCode + ADK + :requestAgentReview`"]:::gcpYellow
         GE_Stg@{ icon: "gcp:vertexai" }
@@ -77,7 +77,7 @@ flowchart TD
         wpC_dst((("C"))):::wp_yellow
         Repo_Prd["`**Repo GitHub PRD**<br>ge-nocode-agents-cb-prd`"]
         Repo_Prd@{ icon: "logos:github" }
-        CB_Deploy_Prd["`**Cloud Build Deploy & Eval**<br>cloudbuild_deploy_and_eval.yaml (_ENV=prd)`"]:::gcpGreen
+        CB_Deploy_Prd["`**Cloud Build (SA ge-cicd-runner)**<br>cloudbuild_deploy_and_eval.yaml (_ENV=prd)`"]:::gcpGreen
         CB_Deploy_Prd@{ icon: "gcp:cloud-build" }
         GE_Prd["`**Gemini Enterprise PRD**<br>:deployLowCode + Smoke Test ADK`"]:::gcpGreen
         GE_Prd@{ icon: "gcp:vertexai" }
