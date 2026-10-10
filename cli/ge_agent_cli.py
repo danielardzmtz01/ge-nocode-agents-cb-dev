@@ -337,6 +337,21 @@ def cmd_push(args: argparse.Namespace) -> None:
     print(f"[push] Deploying agent via: {deploy_url}")
 
   deploy_resp = requests.post(deploy_url, headers=headers, json=deploy_body, timeout=120)
+  if deploy_resp.status_code == 403 and existing:
+    print("[push] Existing agent was owned by a different identity; recreating under WIF Service Account...")
+    requests.delete(f"{base_url}/{agent_resource_name}", headers=headers, timeout=30)
+    create_url = f"{base_url}/{assistant_parent}/agents"
+    api_payload.pop("name", None)
+    resp = requests.post(create_url, headers=headers, json=api_payload, timeout=60)
+    if not resp.ok:
+      raise RuntimeError(f"CreateAgent under WIF failed ({resp.status_code}): {resp.text}")
+    saved_agent = resp.json()
+    agent_resource_name = saved_agent["name"]
+    resolved_agent_id = agent_resource_name.split("/")[-1]
+    deploy_url = f"{base_url}/{agent_resource_name}:deployLowCode" if "lowCodeAgentDefinition" in api_payload else f"{base_url}/{agent_resource_name}:deploy"
+    deploy_body["name"] = agent_resource_name
+    deploy_resp = requests.post(deploy_url, headers=headers, json=deploy_body, timeout=120)
+
   if not deploy_resp.ok:
     raise RuntimeError(f"Deploy failed ({deploy_resp.status_code}): {deploy_resp.text}")
 
