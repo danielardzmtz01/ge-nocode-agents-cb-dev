@@ -14,9 +14,13 @@ terraform {
 }
 
 provider "google" {
-  project = var.ge_project_id
+  project               = var.ge_project_id
+  billing_project       = var.ge_project_id
+  user_project_override = true
 }
 
 provider "google-beta" {
-  project = var.ge_project_id
+  project               = var.ge_project_id
+  billing_project       = var.ge_project_id
+  user_project_override = true
 }
