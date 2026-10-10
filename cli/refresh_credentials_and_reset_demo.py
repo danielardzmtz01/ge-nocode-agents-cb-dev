@@ -9,10 +9,14 @@
    (DEV -> STG -> PRD) from a clean state.
 """
 
+import base64
 import os
 from pathlib import Path
 import subprocess
 import sys
+import google.auth
+import google.auth.transport.requests
+import requests
 
 GH_BIN = os.path.expanduser("~/.local/bin/gh")
 ADC_FILE = Path(os.path.expanduser("~/.config/gcloud/application_default_credentials.json"))
@@ -32,24 +36,27 @@ def main() -> None:
 
   adc_json = ADC_FILE.read_text(encoding="utf-8")
 
+  creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+  creds.refresh(google.auth.transport.requests.Request())
+  headers = {"Authorization": f"Bearer {creds.token}", "Content-Type": "application/json"}
+
   print(f"=== 0. Ensuring Centralized Terraform State Bucket gs://{TF_STATE_BUCKET} in {TF_STATE_PROJECT} ===")
-  res_bkt = run_cmd(
-      [
-          "gcloud",
-          "storage",
-          "buckets",
-          "create",
-          f"gs://{TF_STATE_BUCKET}",
-          f"--project={TF_STATE_PROJECT}",
-          "--location=US",
-          "--uniform-bucket-level-access",
-      ],
-      check=False,
-  )
-  if res_bkt.returncode == 0:
-    print(f"  [OK] Created centralized state bucket gs://{TF_STATE_BUCKET} in {TF_STATE_PROJECT}")
+  r_bkt = requests.get(f"https://storage.googleapis.com/storage/v1/b/{TF_STATE_BUCKET}", headers=headers, timeout=30)
+  if r_bkt.status_code == 404:
+    rc = requests.post(
+        f"https://storage.googleapis.com/storage/v1/b?project={TF_STATE_PROJECT}",
+        headers=headers,
+        json={
+            "name": TF_STATE_BUCKET,
+            "location": "US",
+            "versioning": {"enabled": True},
+            "iamConfiguration": {"uniformBucketLevelAccess": {"enabled": True}},
+        },
+        timeout=30,
+    )
+    print(f"  [OK] Created centralized state bucket gs://{TF_STATE_BUCKET} in {TF_STATE_PROJECT} ({rc.status_code})")
   else:
-    print(f"  [OK] Centralized state bucket gs://{TF_STATE_BUCKET} in {TF_STATE_PROJECT} ready ({res_bkt.stderr.splitlines()[-1] if res_bkt.stderr else 'exists'})")
+    print(f"  [OK] Centralized state bucket gs://{TF_STATE_BUCKET} in {TF_STATE_PROJECT} ready (versioning=True)")
 
   print("\n=== 1. Updating GOOGLE_CREDENTIALS across all 6 GitHub Repositories ===")
   for repo in [
@@ -64,12 +71,15 @@ def main() -> None:
     print(f"  [OK] Updated GOOGLE_CREDENTIALS in {repo}")
 
   print("\n=== 2. Updating ge-adc-credentials in Secret Manager for Cloud Build projects ===")
+  b64_payload = base64.b64encode(adc_json.encode("utf-8")).decode("utf-8")
   for cb_proj in ("goes-ge-cb-dev", "goes-ge-cb-stg", "goes-ge-cb-prd"):
-    run_cmd(
-        ["gcloud", "secrets", "versions", "add", "ge-adc-credentials", f"--project={cb_proj}", f"--data-file={ADC_FILE}"],
-        check=False,
+    r_sm = requests.post(
+        f"https://secretmanager.googleapis.com/v1/projects/{cb_proj}/secrets/ge-adc-credentials:addVersion",
+        headers=headers,
+        json={"payload": {"data": b64_payload}},
+        timeout=30,
     )
-    print(f"  [OK] Added new version of ge-adc-credentials in {cb_proj}")
+    print(f"  [OK] Added new version of ge-adc-credentials in {cb_proj} ({r_sm.status_code})")
 
   print("\n=== 3. Resetting STG & PRD (Deleting custom No-Code Agent in STG & PRD while keeping DEV active) ===")
   for env_name, proj_id in [
