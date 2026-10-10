@@ -130,17 +130,20 @@ def parameterize_agent_payload(
 ) -> Dict[str, Any]:
   """Strips server-generated fields and replaces env-specific IDs with ${...} placeholders."""
   cleaned = copy.deepcopy(raw_agent)
-  for ro_field in READ_ONLY_AGENT_FIELDS:
+  for ro_field in list(READ_ONLY_AGENT_FIELDS) + ["agentIdentityInfo", "observabilityConfig"]:
     cleaned.pop(ro_field, None)
 
   # Remove runtime-only deployed_nodes inside lowCodeAgentDefinition if present
   if "lowCodeAgentDefinition" in cleaned:
     cleaned["lowCodeAgentDefinition"].pop("deployedNodes", None)
+    cleaned["lowCodeAgentDefinition"].pop("deployedRootAgentId", None)
 
   serialized = json.dumps(cleaned, indent=2, ensure_ascii=False)
   serialized = serialized.replace(f"projects/{project_id}", "projects/${GE_PROJECT_ID}")
+  serialized = re.sub(r"projects/\d+/", "projects/${GE_PROJECT_ID}/", serialized)
   serialized = serialized.replace(f"locations/{location}", "locations/${GE_LOCATION}")
   serialized = serialized.replace(f"engines/{engine_id}", "engines/${GE_ENGINE_ID}")
+  serialized = serialized.replace(f"({env_name})", "(${ENV})")
   if data_store_id:
     serialized = serialized.replace(f"dataStores/{data_store_id}", "dataStores/${GE_DATA_STORE_ID}")
     serialized = serialized.replace(data_store_id, "${GE_DATA_STORE_ID}")
@@ -233,15 +236,43 @@ def cmd_pull(args: argparse.Namespace) -> None:
   agent_id = args.agent_id or env_vars.get("GE_AGENT_ID")
   data_store_id = args.data_store_id or env_vars.get("GE_DATA_STORE_ID")
 
-  if not all([project_id, engine_id, agent_id]):
-    raise ValueError("pull requires --project-id, --engine-id, and --agent-id (or via spec_variables.auto.yaml).")
+  if not all([project_id, engine_id]):
+    raise ValueError("pull requires --project-id and --engine-id (or via spec_variables.auto.yaml).")
 
   base_url = get_api_base_url(location)
   assistant_parent = get_assistant_parent(project_id, location, engine_id)
-  url = f"{base_url}/{assistant_parent}/agents/{agent_id}"
-
-  print(f"[pull] Fetching agent definition from: {url}")
   headers = get_auth_headers(project_id)
+
+  out_path = Path(args.template_path)
+  expected_display_name = None
+  if out_path.exists():
+    try:
+      expected_display_name = hydrate_template(out_path.read_text(encoding="utf-8"), env_vars).get("displayName")
+    except Exception:  # pylint: disable=broad-except
+      pass
+
+  existing = find_existing_agent(
+      base_url=base_url,
+      assistant_parent=assistant_parent,
+      headers=headers,
+      agent_id=agent_id,
+      display_name=expected_display_name,
+  )
+  if not existing and not agent_id:
+    list_url = f"{base_url}/{assistant_parent}/agents"
+    l_resp = requests.get(list_url, headers=headers, timeout=30)
+    l_resp.raise_for_status()
+    for ag in l_resp.json().get("agents", []):
+      if ag.get("name", "").split("/")[-1] != "deep_research":
+        existing = ag
+        break
+
+  if not existing:
+    raise RuntimeError(f"No existing No-Code agent found in {project_id}/{engine_id} to pull.")
+
+  resolved_id = existing["name"].split("/")[-1]
+  url = f"{base_url}/{assistant_parent}/agents/{resolved_id}"
+  print(f"[pull] Extracting existing No-Code agent definition from DEV: {url}")
   resp = requests.get(url, headers=headers, timeout=30)
   resp.raise_for_status()
   raw_agent = resp.json()
@@ -255,13 +286,16 @@ def cmd_pull(args: argparse.Namespace) -> None:
       env_name=env_vars.get("ENV", "dev"),
   )
 
-  out_path = Path(args.template_path)
   out_path.parent.mkdir(parents=True, exist_ok=True)
   with open(out_path, "w", encoding="utf-8") as f:
     json.dump(parameterized, f, indent=2, ensure_ascii=False)
     f.write("\n")
 
-  print(f"[pull] Saved parameterized No-Code agent template to: {out_path}")
+  if getattr(args, "output_agent_id_file", None):
+    Path(args.output_agent_id_file).write_text(resolved_id, encoding="utf-8")
+
+  print(f"[pull] Verified & exported No-Code agent '{raw_agent.get('displayName')}' (ID: {resolved_id}) -> {out_path}")
+
 
 
 def cmd_push(args: argparse.Namespace) -> None:
@@ -560,6 +594,7 @@ def build_parser() -> argparse.ArgumentParser:
       default="agents/sv_citizen_assistant/agent_template.json",
       help="Output path for parameterized agent_template.json",
   )
+  p_pull.add_argument("--output-agent-id-file", help="Write resolved Agent ID to a file for downstream steps")
   p_pull.set_defaults(func=cmd_pull)
 
   # push

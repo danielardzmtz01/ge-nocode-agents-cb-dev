@@ -1,4 +1,4 @@
-# GitHub Actions to provision/reconcile IaC (Terraform), deploy Gemini Enterprise No-Code Agents, and run ADK Eval (dev / stg / prd)
+# GitHub Actions to extract (DEV) or deploy (STG / PRD) Gemini Enterprise No-Code Agents and run ADK Eval
 
 name: GE No-Code Agent Deploy & ADK Eval Actions
 
@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   deploy-and-evaluate:
-    name: "GE IaC + No-Code Deploy & ADK Evaluate (${{ vars.ENV }})"
+    name: "GE No-Code Agent CI/CD & ADK Evaluate (${{ vars.ENV }})"
     runs-on: ubuntu-latest
 
     defaults:
@@ -38,11 +38,6 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_wrapper: false
-
       # Authenticate via Keyless Workload Identity Federation (WIF)
       - name: Authenticate to Google Cloud (Keyless WIF)
         uses: google-github-actions/auth@v2
@@ -50,160 +45,61 @@ jobs:
           workload_identity_provider: ${{ vars.WIF_PROVIDER }}
           service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
 
-      - name: "Phase 1 (IaC): Terraform Init, Plan & Apply (Centralized State in drm-tfproject-000)"
+      - name: "Resolve Environment Configuration (${{ vars.ENV }})"
         run: |
-          if [ -n "${{ vars.GE_PROJECT_ID }}" ] && [ -n "${{ vars.WIF_PROVIDER }}" ]; then
-            python3 - <<'EOF'
-          import google.auth
-          from google.auth.transport.requests import Request
-          import requests
-
-          tf_project = "${{ vars.TF_PROJECT || 'drm-tfproject-000' }}"
-          bucket_name = "${{ vars.BACKEND_BUCKET || 'goes-ge-tf-backend' }}"
-          creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
-          creds.refresh(Request())
-          headers = {"Authorization": f"Bearer {creds.token}", "Content-Type": "application/json"}
-          r = requests.get(f"https://storage.googleapis.com/storage/v1/b/{bucket_name}", headers=headers, timeout=30)
-          if r.status_code == 404:
-              r_create = requests.post(
-                  f"https://storage.googleapis.com/storage/v1/b?project={tf_project}",
-                  headers=headers,
-                  json={"name": bucket_name, "location": "US", "iamConfiguration": {"uniformBucketLevelAccess": {"enabled": True}}},
-                  timeout=30,
-              )
-              print(f"[Terraform Backend] Created centralized GCS state bucket gs://{bucket_name} in {tf_project}: {r_create.status_code}")
-          else:
-              print(f"[Terraform Backend] Centralized GCS state bucket gs://{bucket_name} ({tf_project}) already exists.")
-          EOF
-
-            cd terraform_services
-            cat > backend.tf <<EOF
-          terraform {
-            backend "gcs" {
-              bucket = "${{ vars.BACKEND_BUCKET || 'goes-ge-tf-backend' }}"
-              prefix = "${{ vars.ENV }}/services/terraform/state"
-            }
-          }
-          EOF
-
-            cat > spec_variables.auto.tfvars <<EOF
-          env              = "${{ vars.ENV }}"
-          ge_project_id    = "${{ vars.GE_PROJECT_ID }}"
-          ge_location      = "${{ vars.GE_LOCATION }}"
-          ge_engine_id     = "${{ vars.GE_ENGINE_ID }}"
-          ge_data_store_id = "${{ vars.GE_DATA_STORE_ID }}"
-          EOF
-
-            terraform init
-            if ! terraform state show google_discovery_engine_data_store.tramites_ds >/dev/null 2>&1; then
-              terraform import google_discovery_engine_data_store.tramites_ds \
-                "projects/${{ vars.GE_PROJECT_ID }}/locations/${{ vars.GE_LOCATION }}/collections/default_collection/dataStores/${{ vars.GE_DATA_STORE_ID }}" || true
-            fi
-            if ! terraform state show google_storage_bucket.corpus_bucket >/dev/null 2>&1; then
-              terraform import google_storage_bucket.corpus_bucket \
-                "${{ vars.GE_PROJECT_ID }}-ge-corpus-${{ vars.ENV }}" || true
-            fi
-
-            terraform plan
-            terraform apply -auto-approve
-
-            TF_PROJECT_ID="$(terraform output -raw ge_project_id)"
-            TF_LOCATION="$(terraform output -raw ge_location)"
-            TF_ENGINE_ID="$(terraform output -raw ge_engine_id)"
-            TF_DATA_STORE_ID="$(terraform output -raw ge_data_store_id)"
-            cd ..
-
-            cat > spec_variables.auto.yaml <<EOF
-          env: "${{ vars.ENV }}"
-          ge_project_id: "${TF_PROJECT_ID}"
-          ge_location: "${TF_LOCATION}"
-          ge_engine_id: "${TF_ENGINE_ID}"
-          ge_data_store_id: "${TF_DATA_STORE_ID}"
-          ge_agent_id: "${{ vars.GE_AGENT_ID }}"
-          ge_sharing_scope: "${{ vars.GE_SHARING_SCOPE }}"
-          EOF
-          else
-            cat > spec_variables.auto.yaml <<EOF
+          cat > spec_variables.auto.yaml <<EOF
           env: "${{ vars.ENV || 'dev' }}"
-          ge_project_id: "${{ vars.GE_PROJECT_ID || 'sv-gob-ge-demo' }}"
+          ge_project_id: "${{ vars.GE_PROJECT_ID }}"
           ge_location: "${{ vars.GE_LOCATION || 'global' }}"
-          ge_engine_id: "${{ vars.GE_ENGINE_ID || 'sv-citizen-engine-demo' }}"
-          ge_data_store_id: "${{ vars.GE_DATA_STORE_ID || 'sv-tramites-datastore-demo' }}"
+          ge_engine_id: "${{ vars.GE_ENGINE_ID || 'sv-citizen-engine' }}"
+          ge_data_store_id: "${{ vars.GE_DATA_STORE_ID || 'sv-tramites-datastore' }}"
           ge_agent_id: "${{ vars.GE_AGENT_ID }}"
           ge_sharing_scope: "${{ vars.GE_SHARING_SCOPE || 'PRIVATE' }}"
           EOF
-          fi
-          echo "=== Generated spec_variables.auto.yaml from Terraform Outputs ==="
+          echo "=== Resolved Environment Variables (${{ vars.ENV }}) ==="
           cat spec_variables.auto.yaml
 
-      - name: "Phase 2 (No-Code CD): Push & Deploy No-Code Agent to Gemini Enterprise (${{ vars.ENV }})"
+      - name: "Phase 1 (DEV Source): Extract & Parameterize Existing No-Code Agent from DEV (pull)"
+        if: vars.ENV == 'dev'
         run: |
-          if [ -n "${{ vars.GE_PROJECT_ID }}" ] && [ -n "${{ vars.WIF_PROVIDER }}" ]; then
-            python cli/ge_agent_cli.py push \
-              --vars-file spec_variables.auto.yaml \
-              --template-path agents/sv_citizen_assistant/agent_template.json \
-              --output-agent-id-file .resolved_agent_id
-          else
-            echo "Running in Demo/Showcase Mode (GE_PROJECT_ID / WIF_PROVIDER not set) -> Validating hydrated No-Code payload:"
-            python cli/ge_agent_cli.py push \
-              --vars-file spec_variables.auto.yaml \
-              --template-path agents/sv_citizen_assistant/agent_template.json \
-              --dry-run
-            echo "${{ vars.GE_AGENT_ID || 'sv-citizen-assistant' }}" > .resolved_agent_id
-          fi
+          python cli/ge_agent_cli.py pull \
+            --vars-file spec_variables.auto.yaml \
+            --template-path agents/sv_citizen_assistant/agent_template.json \
+            --output-agent-id-file .resolved_agent_id
 
-      - name: "Phase 3 (Quality Gate): Execute ADK Golden Dataset Evaluation (${{ vars.ENV }})"
+      - name: "Phase 1 (Target CD): Deploy No-Code Agent to Gemini Enterprise (${{ vars.ENV }})"
+        if: vars.ENV != 'dev'
         run: |
-          if [ -n "${{ vars.GE_PROJECT_ID }}" ] && [ -n "${{ vars.WIF_PROVIDER }}" ]; then
-            python eval/run_eval.py \
-              --vars-file spec_variables.auto.yaml \
-              --agent-id-file .resolved_agent_id \
-              --template-path agents/sv_citizen_assistant/agent_template.json \
-              --corpus-path agents/sv_citizen_assistant/corpus/manual_oficial_tramites_sv.md \
-              --eval-set-path agents/sv_citizen_assistant/golden_dataset.evalset.json \
-              --eval-config-path agents/sv_citizen_assistant/eval_config.json \
-              --output-dir eval_results
-          else
-            python eval/run_eval.py \
-              --vars-file spec_variables.auto.yaml \
-              --agent-id-file .resolved_agent_id \
-              --template-path agents/sv_citizen_assistant/agent_template.json \
-              --corpus-path agents/sv_citizen_assistant/corpus/manual_oficial_tramites_sv.md \
-              --eval-set-path agents/sv_citizen_assistant/golden_dataset.evalset.json \
-              --eval-config-path agents/sv_citizen_assistant/eval_config.json \
-              --output-dir eval_results \
-              --dry-run
-          fi
+          python cli/ge_agent_cli.py push \
+            --vars-file spec_variables.auto.yaml \
+            --template-path agents/sv_citizen_assistant/agent_template.json \
+            --output-agent-id-file .resolved_agent_id
+
+      - name: "Phase 2 (Quality Gate): Execute ADK Golden Dataset Evaluation (${{ vars.ENV }})"
+        run: |
+          python eval/run_eval.py \
+            --vars-file spec_variables.auto.yaml \
+            --agent-id-file .resolved_agent_id \
+            --template-path agents/sv_citizen_assistant/agent_template.json \
+            --corpus-path agents/sv_citizen_assistant/corpus/manual_oficial_tramites_sv.md \
+            --eval-set-path agents/sv_citizen_assistant/golden_dataset.evalset.json \
+            --eval-config-path agents/sv_citizen_assistant/eval_config.json \
+            --output-dir eval_results
 
       - name: Request HITL Agent Review (STG only)
         if: vars.ENV == 'stg' && github.event_name != 'pull_request'
         run: |
-          if [ -n "${{ vars.GE_PROJECT_ID }}" ] && [ -n "${{ vars.WIF_PROVIDER }}" ]; then
-            python cli/ge_agent_cli.py request-review \
-              --vars-file spec_variables.auto.yaml \
-              --agent-id "$(cat .resolved_agent_id)"
-          else
-            python cli/ge_agent_cli.py request-review \
-              --vars-file spec_variables.auto.yaml \
-              --agent-id "$(cat .resolved_agent_id)" \
-              --dry-run
-          fi
+          python cli/ge_agent_cli.py request-review \
+            --vars-file spec_variables.auto.yaml \
+            --agent-id "$(cat .resolved_agent_id)"
 
       - name: Create Immutable Revision & Publish No-Code Agent (PRD only)
         if: vars.ENV == 'prd' && github.event_name != 'pull_request'
         run: |
-          if [ -n "${{ vars.GE_PROJECT_ID }}" ] && [ -n "${{ vars.WIF_PROVIDER }}" ]; then
-            python cli/ge_agent_cli.py publish \
-              --vars-file spec_variables.auto.yaml \
-              --agent-id "$(cat .resolved_agent_id)" \
-              --version-description "Automated PRD release from commit ${{ github.sha }}"
-          else
-            python cli/ge_agent_cli.py publish \
-              --vars-file spec_variables.auto.yaml \
-              --agent-id "$(cat .resolved_agent_id)" \
-              --version-description "Automated PRD release from commit ${{ github.sha }}" \
-              --dry-run
-          fi
+          python cli/ge_agent_cli.py publish \
+            --vars-file spec_variables.auto.yaml \
+            --agent-id "$(cat .resolved_agent_id)" \
+            --version-description "Automated PRD release from commit ${{ github.sha }}"
 
       - name: Upload ADK Evaluation Report Artifacts
         if: always()
